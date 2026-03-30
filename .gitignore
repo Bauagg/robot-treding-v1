@@ -49,3 +49,6 @@ htmlcov/
 
 # MyPy
 .mypy_cache/
+
+# AI
+.claude
