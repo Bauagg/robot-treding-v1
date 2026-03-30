@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -c \"import sklearn; print\\(sklearn.__version__\\)\")",
+      "Bash(.venv/Scripts/jupyter kernelspec:*)",
+      "Read(//c/Users/baus12345/AppData/Roaming/jupyter/kernels/robot-trading/**)",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(.venv/Scripts/python.exe -c \"import matplotlib, seaborn, sklearn, xgboost, joblib; print\\(''semua OK''\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import matplotlib; import seaborn; import sklearn; import xgboost; import joblib; print\\(''ALL OK''\\)\")",
+      "Bash(\"C:\\\\Users\\\\baus12345\\\\Desktop\\\\robot-treding\\\\.venv\\\\Scripts\\\\python.exe\" -m jupyter nbconvert --to notebook --execute 03_model_training.ipynb --output 03_model_training_output.ipynb --ExecutePreprocessor.timeout=300)",
+      "Bash(\"C:\\\\Users\\\\baus12345\\\\Desktop\\\\robot-treding\\\\.venv\\\\Scripts\\\\python.exe\" -m jupyter nbconvert --to notebook --execute 03_model_training.ipynb --output 03_model_training_output.ipynb --ExecutePreprocessor.timeout=600 --no-input)",
+      "Bash(\"C:\\\\Users\\\\baus12345\\\\Desktop\\\\robot-treding\\\\.venv\\\\Scripts\\\\python.exe\" -c \":*)",
+      "Bash(\"C:\\\\Users\\\\baus12345\\\\Desktop\\\\robot-treding\\\\.venv\\\\Scripts\\\\python.exe\" -m jupyter nbconvert --to notebook --execute 03_model_training.ipynb --output 03_model_training_output.ipynb --ExecutePreprocessor.timeout=600)"
+    ]
+  }
+}
