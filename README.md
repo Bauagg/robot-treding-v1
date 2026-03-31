@@ -72,6 +72,18 @@ alembic upgrade head
 
 ## Cara Jalankan
 
+### Windows
+
+**Aktifkan virtual environment:**
+```bash
+.venv\Scripts\activate
+```
+
+**Nonaktifkan virtual environment:**
+```bash
+deactivate
+```
+
 **Development** (auto-reload saat file berubah):
 ```bash
 .venv\Scripts\activate
@@ -83,6 +95,50 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 .venv\Scripts\activate
 python main.py
 ```
+
+**Background (tanpa terminal):**
+- Jalankan : double-click `start_hidden.vbs`
+- Stop     : double-click `stop.bat`
+
+---
+
+### Ubuntu / Linux
+
+**Aktifkan virtual environment:**
+```bash
+source .venv/bin/activate
+```
+
+**Nonaktifkan virtual environment:**
+```bash
+deactivate
+```
+
+**Development** (auto-reload saat file berubah):
+```bash
+source .venv/bin/activate
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Production:**
+```bash
+source .venv/bin/activate
+python main.py
+```
+
+**Background (tetap jalan walau terminal ditutup):**
+```bash
+# Jalankan
+nohup .venv/bin/python main.py > logs/trading.log 2>&1 &
+echo $! > bot.pid
+
+# Stop
+kill $(cat bot.pid)
+```
+
+> **Catatan:** MetaTrader5 hanya tersedia di Windows. Di Ubuntu bot tidak bisa konek ke MT5.
+
+---
 
 Buka **http://localhost:8000/docs** untuk Swagger UI (test semua endpoint).
 

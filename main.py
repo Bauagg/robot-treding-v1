@@ -22,11 +22,21 @@ _last_candle_time = None
 
 def _fetch_latest_candle_time() -> int | None:
     """Fetch timestamp candle M15 terbaru — dijalankan di executor thread."""
-    if not mt5.initialize(path=settings.MT5_PATH):
+    from loguru import logger
+    ok = mt5.initialize(
+        path=settings.MT5_PATH,
+        login=settings.MT5_LOGIN,
+        password=settings.MT5_PASSWORD,
+        server=settings.MT5_SERVER,
+    )
+    if not ok:
+        err = mt5.last_error()
+        logger.error(f"MT5 initialize gagal | error={err} | path={settings.MT5_PATH} | login={settings.MT5_LOGIN} | server={settings.MT5_SERVER}")
         return None
     try:
         rates = mt5.copy_rates_from_pos(settings.TRADING_SYMBOL, mt5.TIMEFRAME_M15, 0, 1)
         if rates is None or len(rates) == 0:
+            logger.error(f"MT5 copy_rates gagal | error={mt5.last_error()} | symbol={settings.TRADING_SYMBOL}")
             return None
         return int(rates[0]["time"])
     finally:
