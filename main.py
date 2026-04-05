@@ -8,8 +8,9 @@ from app.config.settings import settings
 
 from app.utils.logger import setup_logger
 from app.modules.trade_signal.usecase import TradeSignalUsecase
-from app.modules.trade_signal.models import TradeSignal   # noqa: F401
-from app.modules.trade_order.models import TradeOrder     # noqa: F401
+from app.modules.trade_signal.models import TradeSignal       # noqa: F401
+from app.modules.trade_order.models import TradeOrder         # noqa: F401
+from app.modules.candle_pattern.models import CandlePattern   # noqa: F401
 from app.modules.trade_order.usecase import TradeOrderUsecase
 from app.services.router import register_routers
 

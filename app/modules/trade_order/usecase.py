@@ -115,6 +115,7 @@ class TradeOrderUsecase:
         action: str,
         sl: float | None,
         tp: float | None,
+        created_by: str = "robot",
     ) -> dict:
         loop = asyncio.get_event_loop()
 
@@ -134,16 +135,17 @@ class TradeOrderUsecase:
         result = await loop.run_in_executor(None, self._send_order, action, sl, tp)
 
         record = await repo.save({
-            "signal_id": signal_id,
-            "symbol":    self.symbol,
-            "action":    action,
-            "lot":       self.lot,
-            "price":     result.get("price", 0.0),
-            "sl":        sl,
-            "tp":        tp,
-            "ticket":    result.get("ticket"),
-            "status":    result["status"],
-            "comment":   result.get("comment"),
+            "signal_id":  signal_id,
+            "symbol":     self.symbol,
+            "action":     action,
+            "lot":        self.lot,
+            "price":      result.get("price", 0.0),
+            "sl":         sl,
+            "tp":         tp,
+            "ticket":     result.get("ticket"),
+            "status":     result["status"],
+            "comment":    result.get("comment"),
+            "created_by": created_by,
         })
 
         return {"order_id": record.id, **result}

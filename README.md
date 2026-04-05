@@ -1,6 +1,6 @@
 # Robot Trading
 
-Bot trading otomatis berbasis FastAPI + MetaTrader5 + PostgreSQL.
+Bot trading otomatis berbasis FastAPI + MetaTrader5 + PostgreSQL dengan Precision Strategy.
 
 ## Tech Stack
 
@@ -8,7 +8,7 @@ Bot trading otomatis berbasis FastAPI + MetaTrader5 + PostgreSQL.
 - **MetaTrader5** — koneksi ke MT5 (fetch candle, eksekusi order)
 - **SQLAlchemy + asyncpg** — async database (PostgreSQL)
 - **APScheduler** — polling candle M15 setiap 1 menit
-- **Alembic** — database migration
+- **pandas-ta** — kalkulasi indikator teknikal
 
 ## Prerequisites
 
@@ -21,15 +21,33 @@ Bot trading otomatis berbasis FastAPI + MetaTrader5 + PostgreSQL.
 
 ## Setup Pertama Kali
 
-**1. Masuk folder project**
+**1. Clone / download project**
 ```bash
 cd robot-treding
 ```
 
 **2. Buat virtual environment**
+
+Windows:
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
+```
+
+Nonaktifkan:
+```bash
+deactivate
+```
+
+Ubuntu:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Nonaktifkan:
+```bash
+deactivate
 ```
 
 **3. Install dependencies**
@@ -51,11 +69,11 @@ DB_PASSWORD=your_password
 
 MT5_LOGIN=123456789
 MT5_PASSWORD=your_mt5_password
-MT5_SERVER=Monex-Demo
+MT5_SERVER=Exness-MT5Trial6
 
-TRADING_SYMBOL=EURUSD.m
-INITIAL_CAPITAL=1000.0
-LOT_SIZE=0.01
+TRADING_SYMBOL=EURUSDm
+INITIAL_CAPITAL=100.0
+LOT_SIZE=0.02
 ```
 
 **5. Buat database PostgreSQL**
@@ -63,10 +81,7 @@ LOT_SIZE=0.01
 CREATE DATABASE robot_treding;
 ```
 
-**6. Jalankan migration** (buat tabel di DB)
-```bash
-alembic upgrade head
-```
+**6. Jalankan bot** — tabel DB dibuat otomatis saat pertama kali start.
 
 ---
 
@@ -74,61 +89,34 @@ alembic upgrade head
 
 ### Windows
 
-**Aktifkan virtual environment:**
-```bash
-.venv\Scripts\activate
-```
-
-**Nonaktifkan virtual environment:**
-```bash
-deactivate
-```
-
-**Development** (auto-reload saat file berubah):
-```bash
-.venv\Scripts\activate
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-**Production:**
+**Development** (auto-reload, terminal harus terbuka):
 ```bash
 .venv\Scripts\activate
 python main.py
 ```
 
-**Background (tanpa terminal):**
+**Background (tanpa terminal, direkomendasikan):**
 - Jalankan : double-click `start_hidden.vbs`
 - Stop     : double-click `stop.bat`
+- Update   : double-click `update.bat` (stop → git pull → start ulang)
+
+**Auto-start saat Windows booting:**
+1. Tekan `Win + R` → ketik `shell:startup` → Enter
+2. Copy file `start_hidden.vbs` ke folder yang terbuka
 
 ---
 
 ### Ubuntu / Linux
 
-**Aktifkan virtual environment:**
-```bash
-source .venv/bin/activate
-```
+> **Catatan:** MetaTrader5 hanya tersedia di Windows. Di Ubuntu bot tidak bisa konek ke MT5.
 
-**Nonaktifkan virtual environment:**
-```bash
-deactivate
-```
-
-**Development** (auto-reload saat file berubah):
-```bash
-source .venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-**Production:**
 ```bash
 source .venv/bin/activate
 python main.py
 ```
 
-**Background (tetap jalan walau terminal ditutup):**
+**Background:**
 ```bash
-# Jalankan
 nohup .venv/bin/python main.py > logs/trading.log 2>&1 &
 echo $! > bot.pid
 
@@ -136,11 +124,16 @@ echo $! > bot.pid
 kill $(cat bot.pid)
 ```
 
-> **Catatan:** MetaTrader5 hanya tersedia di Windows. Di Ubuntu bot tidak bisa konek ke MT5.
-
 ---
 
-Buka **http://localhost:8000/docs** untuk Swagger UI (test semua endpoint).
+## Cara Lihat Bot Berjalan
+
+Buka browser: **http://localhost:8000/docs** — Swagger UI untuk test semua endpoint.
+
+Atau cek health:
+```
+GET http://localhost:8000/health
+```
 
 ---
 
@@ -156,11 +149,10 @@ Buka **http://localhost:8000/docs** untuk Swagger UI (test semua endpoint).
 **Dashboard — contoh:**
 ```
 GET /api/v1/trade-signals/dashboard
-GET /api/v1/trade-signals/dashboard?date_from=2025-04-01&date_to=2026-03-03
+GET /api/v1/trade-signals/dashboard?date_from=2026-01-01&date_to=2026-04-03
 GET /api/v1/trade-signals/dashboard?signal=buy
-GET /api/v1/trade-signals/dashboard?date_from=2025-01-01&date_to=2025-12-31&signal=sell
 ```
-Default filter: **hari ini**. Return summary (total buy/sell/hold) + semua data dalam range.
+Default filter: **hari ini**.
 
 ### Trade Order
 | Method | Endpoint | Keterangan |
@@ -175,21 +167,39 @@ Default filter: **hari ini**. Return summary (total buy/sell/hold) + semua data 
 ```
 Setiap 1 menit → cek candle M15 terbaru dari MT5
     ↓ candle baru terbentuk?
-    ↓ Ya
-    ↓ Analisa H1 trend (EMA 50 vs EMA 200)
-    ↓ Analisa M15 entry (RSI, MACD, EMA 9/21, BB)
-    ↓ Cek slope filter (RSI slope + MACD slope)
-    ↓ Signal BUY / SELL / HOLD
-    ↓ Simpan ke DB
+    ↓ Ya — jalankan Precision Strategy
+    ↓
+    ↓ Filter jam trading (UTC): 02,03,08,09,10,12,13,16,17
+    ↓ Analisa H1 (500 candle): Trend EMA50+200 + S/R Zone
+    ↓ Analisa M15: MACD histogram + EMA9/21 + Candle Pattern
+    ↓ Hitung Confluence Score (0-5)
+    ↓ Score >= 3 → BUY / SELL
+    ↓ Simpan signal ke DB
+    ↓ Simpan candle pattern ke DB (dataset ML)
     ↓ BUY/SELL → eksekusi order ke MT5
 ```
 
-**Strategi (hasil backtest sweep 5,760 kombinasi — 2021-2026):**
-- RSI Buy ≤ 30 | RSI Sell ≥ 70
-- ATR min 10 pips (hindari market flat)
-- Min 3/4 indikator searah + slope filter aktif
-- SL = 1.0x ATR | TP = 1.5x ATR
-- Win Rate: 48.6% | Profit Factor: 1.65
+## Precision Strategy
+
+| Parameter | Nilai |
+|-----------|-------|
+| Lot | 0.02 |
+| SL | 1.0x ATR M15 |
+| TP | 1.5x ATR M15 (RR 1:1.5) |
+| Daily TP target | +$10 (stop trading hari itu) |
+| Daily SL limit | -$5 (stop trading hari itu) |
+
+**Confluence Score (0-5):**
+- `+2` Trend H1 kuat (EMA50 slope + harga vs EMA200) + harga di S/R Zone ← wajib
+- `+1` MACD histogram arah searah signal
+- `+1` EMA9 vs EMA21 posisi searah signal
+- `+1` Candle pattern (pin bar / engulfing)
+
+**Hasil backtest Des 2021 – Mar 2026:**
+- Win Rate: 53.2% (hanya jam terbaik)
+- Profit Factor: 1.86
+- Total: +$395 (modal $100, lot 0.02)
+- Max Drawdown: $31.82
 
 ---
 
@@ -203,22 +213,18 @@ robot-treding/
 │   │   └── settings.py         # Konfigurasi dari .env
 │   ├── modules/
 │   │   ├── trade_signal/       # Signal analisa + simpan ke DB
-│   │   │   ├── models.py
-│   │   │   ├── schemas.py
-│   │   │   ├── repository.py
-│   │   │   ├── usecase.py
-│   │   │   ├── controller.py
-│   │   │   └── router.py
-│   │   └── trade_order/        # Eksekusi order ke MT5
-│   ├── services/
-│   │   └── router.py           # Register semua router
-│   ├── ai/
-│   │   └── candle_ai/          # Notebook ML (eksperimen)
-│   └── utils/
-│       ├── indicators.py       # EMA, RSI, MACD, ATR, BB
-│       └── logger.py
+│   │   ├── trade_order/        # Eksekusi order ke MT5
+│   │   └── candle_pattern/     # Log candle pattern (dataset ML)
+│   ├── utils/
+│   │   ├── indicators.py       # EMA, MACD, ATR, S/R, candle pattern
+│   │   └── logger.py
+│   └── ai/
+│       └── candle_ai/          # Notebook ML (eksperimen)
 ├── tests/
-│   └── backtest/               # Notebook backtest & sweep
+│   └── backtest_indicator/     # Notebook backtest strategi
+├── start_hidden.vbs            # Jalankan bot di background (Windows)
+├── stop.bat                    # Stop bot
+├── update.bat                  # Update + restart bot
 ├── main.py                     # Entry point + scheduler
 ├── requirements.txt
 └── .env
@@ -230,5 +236,6 @@ robot-treding/
 
 - Bot hanya jalan di **Windows** (MetaTrader5 Windows only)
 - MT5 harus dalam kondisi **login & terhubung** saat bot berjalan
-- Tabel DB dibuat otomatis saat app pertama kali start (`create_all`)
+- Tabel DB dibuat **otomatis** saat app pertama kali start
 - Log tersimpan di folder `logs/`
+- Jam trading aktif (WIB): 09:00, 10:00, 15:00, 16:00, 17:00, 19:00, 20:00, 23:00, 00:00

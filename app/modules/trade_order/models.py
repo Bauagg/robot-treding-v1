@@ -23,5 +23,6 @@ class TradeOrder(Base):
     profit:      Mapped[float | None] = mapped_column(Float, nullable=True)     # profit/loss
     outcome:     Mapped[str | None]   = mapped_column(String(10), nullable=True)  # profit / loss / be
     comment:     Mapped[str | None]   = mapped_column(String(100), nullable=True)
+    created_by:  Mapped[str]          = mapped_column(String(100), default="robot")  # robot / A. Mambaus Sholihin
     closed_at:   Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at:  Mapped[datetime]     = mapped_column(DateTime, default=lambda: datetime.utcnow())
