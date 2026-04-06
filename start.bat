@@ -2,6 +2,8 @@
 cd /d "%~dp0"
 
 echo Menjalankan Robot Trading...
+echo Install/update package...
+.venv\Scripts\pip.exe install -r requirements.txt
 start "RobotTrading" /min .venv\Scripts\python.exe main.py
 
 echo.

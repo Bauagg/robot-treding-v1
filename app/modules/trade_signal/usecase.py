@@ -363,7 +363,7 @@ class TradeSignalUsecase:
         await CandlePatternRepository(db).save({
             "symbol":        self.symbol,
             "timeframe":     "M15",
-            "datetime":      df_m15["time"].iloc[-1],
+            "candle_time":   df_m15["time"].iloc[-1],
             "open":          m15["open_m15"],
             "high":          m15["high_m15"],
             "low":           m15["low_m15"],

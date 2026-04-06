@@ -12,7 +12,7 @@ class CandlePattern(Base):
     id:        Mapped[int]      = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol:    Mapped[str]      = mapped_column(String(20))
     timeframe: Mapped[str]      = mapped_column(String(5))
-    datetime:  Mapped[datetime] = mapped_column(DateTime)
+    candle_time: Mapped[datetime] = mapped_column(DateTime)
 
     # ── OHLCV ────────────────────────────────────────────────────────────────
     open:   Mapped[float] = mapped_column(Float)
