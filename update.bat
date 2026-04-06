@@ -8,7 +8,13 @@ wmic process where "name='python.exe' and commandline like '%%main.py%%'" delete
 timeout /t 2 >nul
 
 echo [2/3] Pull update dari GitHub...
-git pull
+git pull origin main
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo [ERROR] git pull gagal! Periksa koneksi internet atau credential GitHub.
+    pause
+    exit /b 1
+)
 
 echo [3/3] Menjalankan bot kembali...
 timeout /t 2 >nul
