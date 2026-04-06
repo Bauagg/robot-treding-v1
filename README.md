@@ -92,7 +92,7 @@ CREATE DATABASE robot_treding;
 **Development** (auto-reload, terminal harus terbuka):
 ```bash
 .venv\Scripts\activate
-python main.py
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 **Background (tanpa terminal, direkomendasikan):**

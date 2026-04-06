@@ -1,5 +1,13 @@
 @echo off
 cd /d "%~dp0"
-call .venv\Scripts\activate
-start "Robot Trading" /min python main.py
-echo Bot started in background. Check http://localhost:8000/docs
+
+echo Menjalankan Robot Trading...
+start "RobotTrading" /min .venv\Scripts\python.exe main.py
+
+echo.
+echo Bot sudah jalan di background (minimized).
+echo Dashboard : http://localhost:8000/docs
+echo Health    : http://localhost:8000/health
+echo.
+echo Untuk jalankan tanpa jendela sama sekali, gunakan start_hidden.vbs
+pause

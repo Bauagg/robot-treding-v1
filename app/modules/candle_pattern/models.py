@@ -37,6 +37,6 @@ class CandlePattern(Base):
     score:         Mapped[int]  = mapped_column(Integer, default=0)
 
     # ── Label ML ─────────────────────────────────────────────────────────────
-    outcome: Mapped[str] = mapped_column(String(10), nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.utcnow())
