@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import settings
 from app.utils.indicators import classify_candle
-from app.utils.analysis import analyze_h1, analyze_m15, get_confluence_score
+from app.utils.analysis import analyze_h1, analyze_h4, analyze_m15, get_confluence_score
 from app.modules.candle_pattern.repository import CandlePatternRepository
 from app.modules.trade_signal.repository import TradeSignalRepository
 from app.modules.trade_order.usecase import TradeOrderUsecase
@@ -24,14 +24,7 @@ _TF_MAP = {
     "1d":  mt5.TIMEFRAME_D1,
 }
 
-# ─── Jam trading terbaik (UTC) ─────────────────────────────────────────────
-# Tidak ada filter jam — bot jalan 24 jam
-# Signal tetap difilter oleh confluence score >= 3
-BEST_HOURS_UTC = set(range(24))
-
-# ─── Trend filter threshold ────────────────────────────────────────────────
-# EMA50 slope minimal X pip dalam 3 candle H1
-# Dari sweep backtest: 0.00025 = optimal (WR 50%, PF 1.445)
+# EMA50 slope minimal X pip dalam 3 candle — dari sweep backtest
 SLOPE_THRESHOLD = 0.00025
 
 
@@ -93,7 +86,7 @@ class TradeSignalUsecase:
         logger.debug(f"Fetched {len(df)} candles | {self.symbol} {timeframe} | last: {df['time'].iloc[-1]}")
         return df
 
-    def _fetch_all_candles(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _fetch_all_candles(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         ok = mt5.initialize(
             path=settings.MT5_PATH,
             login=settings.MT5_LOGIN,
@@ -103,9 +96,10 @@ class TradeSignalUsecase:
         if not ok:
             raise RuntimeError(f"MT5 initialize gagal: {mt5.last_error()}")
         try:
+            df_h4  = self._fetch_candles("4h",  count=220)   # 200 + buffer konfirmasi H4
             df_h1  = self._fetch_candles("1h",  count=740)   # 720 + buffer (~1 bulan)
             df_m15 = self._fetch_candles("15m", count=100)
-            return df_h1, df_m15
+            return df_h4, df_h1, df_m15
         finally:
             mt5.shutdown()
 
@@ -117,62 +111,65 @@ class TradeSignalUsecase:
         logger.info(f"[{self.symbol}] Menganalisa sinyal — Precision Strategy")
 
         loop = asyncio.get_event_loop()
-        df_h1, df_m15 = await loop.run_in_executor(None, self._fetch_all_candles)
+        df_h4, df_h1, df_m15 = await loop.run_in_executor(None, self._fetch_all_candles)
 
-        h1  = analyze_h1(df_h1)
+        trend_h4  = analyze_h4(df_h4)
+        h1        = analyze_h1(df_h1)
         sup_zones = h1.pop("_sup_zones")
         res_zones = h1.pop("_res_zones")
-        m15 = analyze_m15(df_m15, sup_zones, res_zones)
+        m15       = analyze_m15(df_m15, sup_zones, res_zones)
 
-        trend      = h1["trend_h1"]
-        in_sup     = h1["in_support"]
-        in_res     = h1["in_resistance"]
-        atr_val    = m15["atr_m15"]
+        trend   = h1["trend_h1"]
+        in_sup  = h1["in_support"]
+        in_res  = h1["in_resistance"]
+        atr_val = m15["atr_m15"]
 
-        # ── Hitung Confluence Score ──
+        # ── ATR filter — minimal 5 pip (dilonggarkan dari 8) ──
         action = "hold"
         score  = 0
 
-        # ATR filter — minimal 8 pip
-        if atr_val < 0.0008:
+        if atr_val < 0.0005:
             logger.info(f"[{self.symbol}] ATR terlalu kecil ({atr_val:.5f}) — skip")
-        elif trend == "up" and in_sup:
-            # BUY: dasar 2 poin (trend kuat + di support zone)
-            score = 2
-            if m15["macd_up"]:              score += 1
-            if m15["ema_bias"] == "buy":    score += 1
-            if m15["has_bull_pattern"]:     score += 1
-            if score >= 3:
-                action = "buy"
-        elif trend == "down" and in_res:
-            # SELL: dasar 2 poin (trend kuat + di resistance zone)
-            score = 2
-            if m15["macd_down"]:            score += 1
-            if m15["ema_bias"] == "sell":   score += 1
-            if m15["has_bear_pattern"]:     score += 1
-            if score >= 3:
-                action = "sell"
+        else:
+            buy_score  = get_confluence_score("buy",  h1, m15, trend_h4)
+            sell_score = get_confluence_score("sell", h1, m15, trend_h4)
 
-        # ── Risk Management ──
+            if buy_score >= 3:
+                action = "buy"
+                score  = buy_score
+            elif sell_score >= 3:
+                action = "sell"
+                score  = sell_score
+
+        # ── Adaptive SL/TP berdasarkan score ──
+        # Score 3 → setup lemah  → SL 1.5x, TP 1.5x  (RR 1:1)
+        # Score 4 → setup bagus  → SL 1.2x, TP 2.0x  (RR 1:1.7)
+        # Score 5/6 → setup kuat → SL 1.0x, TP 2.5x  (RR 1:2.5)
         close = m15["close_m15"]
         atr   = m15["atr_m15"]
-        if action == "buy":
-            sl  = round(close - 1.2 * atr, 4)
-            tp1 = round(close + 1.5 * atr, 4)
-            tp2 = round(close + 2.0 * atr, 4)
-        elif action == "sell":
-            sl  = round(close + 1.2 * atr, 4)
-            tp1 = round(close - 1.5 * atr, 4)
-            tp2 = round(close - 2.0 * atr, 4)
+
+        if action != "hold":
+            if score >= 5:
+                sl_mult, tp_mult = 1.0, 2.5
+            elif score == 4:
+                sl_mult, tp_mult = 1.2, 2.0
+            else:
+                sl_mult, tp_mult = 1.5, 1.5
+
+            if action == "buy":
+                sl  = round(close - sl_mult * atr, 4)
+                tp1 = round(close + tp_mult * atr, 4)
+            else:
+                sl  = round(close + sl_mult * atr, 4)
+                tp1 = round(close - tp_mult * atr, 4)
         else:
-            sl = tp1 = tp2 = None
+            sl = tp1 = None
 
         result = {
             "symbol":        self.symbol,
             "signal":        action,
             "sl":            sl,
             "tp1":           tp1,
-            "tp2":           tp2,
             "timestamp_h1":  df_h1["time"].iloc[-1],
             "timestamp_m15": df_m15["time"].iloc[-1],
             **h1,
@@ -182,20 +179,20 @@ class TradeSignalUsecase:
         }
 
         logger.info(
-            f"[{self.symbol}] Signal: {action.upper()} | Score: {score}/5 | "
+            f"[{self.symbol}] Signal: {action.upper()} | Score: {score}/6 | "
             f"Trend H1: {trend} | InSup: {in_sup} | InRes: {in_res} | "
             f"ATR: {atr_val:.5f} | "
             f"MACD_up={m15['macd_up']} MACD_dn={m15['macd_down']} "
             f"EMA_bias={m15['ema_bias']} Pattern_bull={m15['has_bull_pattern']} "
             f"Pattern_bear={m15['has_bear_pattern']} | "
-            f"SL: {sl} | TP1: {tp1} | TP2: {tp2}"
+            f"SL: {sl} | TP1: {tp1}"
         )
 
         repo   = TradeSignalRepository(db)
         record = await repo.save(result)
         logger.success(
             f"[{self.symbol}] Signal tersimpan | ID: {record.id} | "
-            f"Signal: {action.upper()} | Score: {score}/5"
+            f"Signal: {action.upper()} | Score: {score}/6"
         )
 
         # ── Simpan candle pattern ke DB untuk dataset ML ──

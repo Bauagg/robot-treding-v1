@@ -81,7 +81,7 @@ def find_swing_levels(
 def detect_candle_pattern(df: pd.DataFrame) -> tuple[bool, bool]:
     """
     Deteksi candle pattern bullish / bearish pada candle terakhir.
-    Pattern yang dikenali: pin bar dan engulfing.
+    Pattern yang dikenali: pin bar, engulfing, marubozu.
 
     Returns
     -------
@@ -94,10 +94,11 @@ def detect_candle_pattern(df: pd.DataFrame) -> tuple[bool, bool]:
     prev_o = float(df["open"].iloc[-2])
     prev_c = float(df["close"].iloc[-2])
 
-    body      = abs(close - o_val)
-    up_shad   = h_val - max(o_val, close)
-    lo_shad   = min(o_val, close) - l_val
-    mid_price = (h_val + l_val) / 2
+    body         = abs(close - o_val)
+    up_shad      = h_val - max(o_val, close)
+    lo_shad      = min(o_val, close) - l_val
+    candle_range = h_val - l_val
+    mid_price    = (h_val + l_val) / 2
 
     # Pin bar
     pin_bull = lo_shad > 2.0 * body and lo_shad > up_shad and close > mid_price
@@ -109,7 +110,11 @@ def detect_candle_pattern(df: pd.DataFrame) -> tuple[bool, bool]:
     eng_bear = (close < o_val and prev_c > prev_o
                 and close < prev_o and o_val > prev_c)
 
-    return (pin_bull or eng_bull), (pin_bear or eng_bear)
+    # Marubozu — body >= 80% range, momentum kuat searah
+    maru_bull = close > o_val and candle_range > 0 and body >= candle_range * 0.8
+    maru_bear = close < o_val and candle_range > 0 and body >= candle_range * 0.8
+
+    return (pin_bull or eng_bull or maru_bull), (pin_bear or eng_bear or maru_bear)
 
 
 def classify_candle(df: pd.DataFrame) -> dict:

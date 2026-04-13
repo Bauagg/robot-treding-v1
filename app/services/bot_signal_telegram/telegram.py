@@ -4,7 +4,7 @@ import MetaTrader5 as mt5
 from loguru import logger
 
 from app.config.settings import settings
-from app.utils.indicators import calculate_macd, calculate_atr, calculate_obv, find_swing_levels
+from app.utils.indicators import calculate_macd, calculate_atr, find_swing_levels
 from app.utils.analysis import cluster_zones
 
 
@@ -154,50 +154,65 @@ def _trend_label(df: pd.DataFrame) -> str:
     return "SIDEWAYS"
 
 
-def _volume_detail(df: pd.DataFrame) -> dict:
+def _setup_quality(
+    trends: dict,
+    macd_frames: dict,
+    sr_strong: bool,
+) -> tuple[str, float, float]:
     """
-    Analisis volume pakai OBV + volume candle terakhir vs rata-rata.
+    Tentukan kualitas setup berdasarkan:
+    - Jumlah TF searah (dari trends dict)
+    - MACD kuat (D1/H4 histogram naik kuat)
+    - Harga di S/R kuat (D1 atau H4)
 
-    - OBV naik  = tekanan beli (akumulasi)
-    - OBV turun = tekanan jual (distribusi)
-    - Volume candle terakhir vs avg 20 candle → tinggi/normal/rendah
-    - Prediksi arah: OBV + trend volume
+    Return (label, sl_mult, tp_mult)
     """
-    try:
-        obv     = calculate_obv(df)
-        curr_obv = float(obv.iloc[-1])
-        prev_obv = float(obv.iloc[-4])   # slope 4 candle
-        obv_slope = curr_obv - prev_obv
+    tf_count = sum(1 for t in trends.values() if t in ("UP", "DOWN"))
+    aligned  = len(set(trends.values()) - {"SIDEWAYS"}) <= 1  # semua searah
 
-        vol_curr = float(df["volume"].iloc[-1])
-        vol_avg  = float(df["volume"].iloc[-20:].mean())
-        vol_ratio = vol_curr / vol_avg if vol_avg > 0 else 1.0
+    # Cek MACD kuat di D1 atau H4
+    macd_kuat = False
+    for tf in ("D1", "H4"):
+        m = macd_frames.get(tf)
+        if m and abs(m["slope"]) > 0.00005 and (
+            (m["histogram"] > 0 and m["slope"] > 0) or
+            (m["histogram"] < 0 and m["slope"] < 0)
+        ):
+            macd_kuat = True
+            break
 
-        if vol_ratio >= 1.5:
-            vol_label = f"🔥 TINGGI ({vol_ratio:.1f}x avg)"
-        elif vol_ratio >= 0.8:
-            vol_label = f"➡️ NORMAL ({vol_ratio:.1f}x avg)"
-        else:
-            vol_label = f"😴 RENDAH ({vol_ratio:.1f}x avg)"
+    # ── Tentukan kualitas ──
+    if aligned and tf_count >= 4 and macd_kuat and sr_strong:
+        return "🔥 SETUP KUAT", 1.0, 2.5
 
-        if obv_slope > 0 and vol_ratio >= 1.0:
-            prediksi = "🟢 Tekanan BELI — potensi naik"
-        elif obv_slope < 0 and vol_ratio >= 1.0:
-            prediksi = "🔴 Tekanan JUAL — potensi turun"
-        elif obv_slope > 0:
-            prediksi = "🟡 Akumulasi lemah — hati-hati"
-        elif obv_slope < 0:
-            prediksi = "🟡 Distribusi lemah — hati-hati"
-        else:
-            prediksi = "⚪ Sideways — tidak ada tekanan"
+    if tf_count >= 3 and (macd_kuat or sr_strong):
+        return "✅ SETUP BAGUS", 1.2, 2.0
 
-        return {
-            "vol_label": vol_label,
-            "obv_slope": obv_slope,
-            "prediksi":  prediksi,
-        }
-    except Exception:
-        return {"vol_label": "?", "obv_slope": 0, "prediksi": "?"}
+    return "⚠️ SETUP LEMAH", 1.5, 1.5
+
+
+def _order_calc(
+    close: float,
+    bias: str,
+    atr: float,
+    sl_mult: float,
+    tp_mult: float,
+) -> dict:
+    """Hitung SL dan TP berdasarkan multiplier kualitas setup."""
+    sl_dist = round(atr * sl_mult, 5)
+    tp_dist = round(atr * tp_mult, 5)
+    sl_pip  = round(sl_dist / 0.0001, 1)
+    tp_pip  = round(tp_dist / 0.0001, 1)
+    rr      = round(tp_pip / sl_pip, 2)
+
+    if bias == "BUY":
+        sl = round(close - sl_dist, 5)
+        tp = round(close + tp_dist, 5)
+    else:
+        sl = round(close + sl_dist, 5)
+        tp = round(close - tp_dist, 5)
+
+    return {"sl": sl, "tp": tp, "sl_pip": sl_pip, "tp_pip": tp_pip, "rr": rr}
 
 
 def _macd_detail(df: pd.DataFrame) -> dict:
@@ -291,21 +306,12 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
         arah_mv = "naik" if m["slope"] > 0 else ("turun" if m["slope"] < 0 else "")
         L.append(f"  {tf} {m['arah']} — {pos}, {spd} {arah_mv}".strip())
 
-    # ── Volume ──────────────────────────────
-    L.append("")
-    L.append("<b>Volume</b>")
-    for tf in ("D1", "H4", "H1", "M15"):
-        df = frames.get(tf)
-        if df is None or len(df) < 25:
-            continue
-        v = _volume_detail(df)
-        L.append(f"  {tf} {v['vol_label']} → {v['prediksi']}")
-
-    # ── ATR ─────────────────────────────────
+    # ── ATR + Kalkulasi Order ────────────────
     df_m15 = frames.get("M15")
     if df_m15 is not None and len(df_m15) >= 15:
-        atr = float(calculate_atr(df_m15, 14).iloc[-1])
-        pip = round(atr / 0.0001, 1)
+        atr   = float(calculate_atr(df_m15, 14).iloc[-1])
+        pip   = round(atr / 0.0001, 1)
+        close = float(df_m15["close"].iloc[-1])
         L.append(f"\n<b>Volatilitas</b> ~{pip} pip per candle M15")
 
     # ── S/R ─────────────────────────────────
@@ -366,5 +372,98 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
 
     L.append(f"<b>🎯 {bias}</b>  {up}↑ {down}↓ dari {n} TF")
     L.append(f"  {saran}")
+
+    # ── Kalkulasi Order ──────────────────────
+    has_bias = bias not in ("⚪ Sideways",)
+    if df_m15 is not None and len(df_m15) >= 15 and has_bias:
+        atr   = float(calculate_atr(df_m15, 14).iloc[-1])
+        close = float(df_m15["close"].iloc[-1])
+        side  = "BUY" if up >= down else "SELL"
+
+        # Kumpulkan MACD detail semua TF untuk quality check
+        macd_frames = {}
+        for tf in ("D1", "H4"):
+            df = frames.get(tf)
+            if df is not None and len(df) >= 35:
+                _, _, histogram = calculate_macd(df)
+                hist_curr = float(histogram.iloc[-1])
+                hist_prev = float(histogram.iloc[-2])
+                macd_frames[tf] = {
+                    "histogram": hist_curr,
+                    "slope":     round(hist_curr - hist_prev, 6),
+                }
+
+        # Cek apakah harga di S/R kuat (D1 atau H4)
+        sr_strong = False
+        for tf in ("D1", "H4"):
+            df = frames.get(tf)
+            if df is not None and len(df) >= 20:
+                c  = float(df["close"].iloc[-1])
+                sr = _sr_zones(df, c)
+                if sr["near_sup"] or sr["near_res"]:
+                    sr_strong = True
+                    break
+
+        # ── Hitung signal score (0-6) ──────────────
+        # +1 H1 trend searah
+        # +1 H4 searah (bukan berlawanan)
+        # +1 D1 searah (bukan berlawanan)
+        # +1 MACD M15 histogram searah
+        # +1 MACD H1 histogram searah
+        # +1 Harga di S/R kuat
+        score = 0
+        h1_trend = trends.get("H1", "SIDEWAYS")
+        h4_trend = trends.get("H4", "SIDEWAYS")
+        d1_trend = trends.get("D1", "SIDEWAYS")
+
+        if side == "BUY":
+            if h1_trend  == "UP":                    score += 1
+            if h4_trend  in ("UP", "SIDEWAYS"):      score += 1
+            if d1_trend  in ("UP", "SIDEWAYS"):      score += 1
+            # MACD M15
+            df_m15_check = frames.get("M15")
+            if df_m15_check is not None and len(df_m15_check) >= 35:
+                _, _, hist = calculate_macd(df_m15_check)
+                if float(hist.iloc[-1]) > 0:         score += 1
+            # MACD H1
+            df_h1_check = frames.get("H1")
+            if df_h1_check is not None and len(df_h1_check) >= 35:
+                _, _, hist = calculate_macd(df_h1_check)
+                if float(hist.iloc[-1]) > 0:         score += 1
+            if sr_strong:                            score += 1
+        else:  # SELL
+            if h1_trend  == "DOWN":                  score += 1
+            if h4_trend  in ("DOWN", "SIDEWAYS"):    score += 1
+            if d1_trend  in ("DOWN", "SIDEWAYS"):    score += 1
+            df_m15_check = frames.get("M15")
+            if df_m15_check is not None and len(df_m15_check) >= 35:
+                _, _, hist = calculate_macd(df_m15_check)
+                if float(hist.iloc[-1]) < 0:         score += 1
+            df_h1_check = frames.get("H1")
+            if df_h1_check is not None and len(df_h1_check) >= 35:
+                _, _, hist = calculate_macd(df_h1_check)
+                if float(hist.iloc[-1]) < 0:         score += 1
+            if sr_strong:                            score += 1
+
+        # Hanya tampil kalau score >= 3
+        if score < 3:
+            L.append("")
+            L.append(f"⛔ Signal lemah ({score}/6) — tidak layak order")
+        else:
+            qlabel, sl_mult, tp_mult = _setup_quality(trends, macd_frames, sr_strong)
+            o = _order_calc(close, side, atr, sl_mult, tp_mult)
+
+            # Bar kekuatan visual
+            filled = "█" * score
+            empty  = "░" * (6 - score)
+            bar    = f"{filled}{empty} {score}/6"
+
+            L.append("")
+            L.append(f"<b>📌 Kalkulasi {side}</b>  {qlabel}")
+            L.append(f"  Kekuatan : {bar}")
+            L.append(f"  Entry    : {close:.5f}")
+            L.append(f"  SL       : {o['sl']:.5f}  (-{o['sl_pip']} pip)")
+            L.append(f"  TP       : {o['tp']:.5f}  (+{o['tp_pip']} pip)")
+            L.append(f"  R:R      : 1 : {o['rr']}")
 
     return "\n".join(L)

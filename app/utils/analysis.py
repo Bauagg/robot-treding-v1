@@ -29,10 +29,33 @@ def cluster_zones(levels: list[float]) -> list[float]:
     return zones
 
 
+def analyze_h4(df_h4: pd.DataFrame) -> str:
+    """
+    Trend H4 — konfirmasi arah besar.
+    Return "up" / "down" / "sideways"
+    Syarat: slope wajib + salah satu (close vs EMA200 ATAU EMA50 vs EMA200).
+    """
+    try:
+        ema50  = calculate_ema(df_h4, 50)
+        ema200 = calculate_ema(df_h4, 200)
+        e50    = float(ema50.iloc[-1])
+        e200   = float(ema200.iloc[-1])
+        slope  = float(ema50.iloc[-1]) - float(ema50.iloc[-4])
+        close  = float(df_h4["close"].iloc[-1])
+
+        if slope > SLOPE_THRESHOLD and (close > e200 or e50 > e200):
+            return "up"
+        if slope < -SLOPE_THRESHOLD and (close < e200 or e50 < e200):
+            return "down"
+    except Exception:
+        pass
+    return "sideways"
+
+
 def analyze_h1(df_h1: pd.DataFrame) -> dict:
     """
     Hitung trend H1 (EMA50 slope + posisi vs EMA200)
-    dan cari S/R zone dari 500 candle terakhir.
+    dan cari S/R zone dari 720 candle terakhir (~1 bulan).
 
     Returns dict berisi data H1 + _sup_zones + _res_zones (raw, untuk analyze_m15).
     """
@@ -46,10 +69,10 @@ def analyze_h1(df_h1: pd.DataFrame) -> dict:
     slope      = float(ema50.iloc[-1]) - float(ema50.iloc[-4])
     close      = float(df_h1["close"].iloc[-1])
 
-    # Trend kuat: slope threshold + EMA50 vs EMA200 + close vs EMA200
-    if slope > SLOPE_THRESHOLD and close > e200 and e50 > e200:
+    # Trend: slope wajib + salah satu (close vs EMA200 ATAU EMA50 vs EMA200)
+    if slope > SLOPE_THRESHOLD and (close > e200 or e50 > e200):
         trend = "up"
-    elif slope < -SLOPE_THRESHOLD and close < e200 and e50 < e200:
+    elif slope < -SLOPE_THRESHOLD and (close < e200 or e50 < e200):
         trend = "down"
     else:
         trend = "sideways"
@@ -59,26 +82,25 @@ def analyze_h1(df_h1: pd.DataFrame) -> dict:
     res_zones = cluster_zones(res_levels)
     sup_zones = cluster_zones(sup_levels)
 
-    # Cek proximity harga ke zona (1.0x ATR H1)
-    thr          = 1.0 * atr_val_h1
+    # Cek proximity harga ke zona (1.5x ATR H1) — diperlebar agar tidak miss
+    thr           = 1.5 * atr_val_h1
     in_resistance = any(abs(close - z) <= thr for z in res_zones)
     in_support    = any(abs(close - z) <= thr for z in sup_zones)
 
     return {
-        "open_h1":      round(float(df_h1["open"].iloc[-1]), 4),
-        "high_h1":      round(float(df_h1["high"].iloc[-1]), 4),
-        "low_h1":       round(float(df_h1["low"].iloc[-1]), 4),
-        "close_h1":     round(close, 4),
-        "volume_h1":    round(float(df_h1["volume"].iloc[-1]), 2),
-        "trend_h1":     trend,
-        "ema_50_h1":    round(e50, 4),
-        "ema_200_h1":   round(e200, 4),
-        "in_support":   in_support,
-        "in_resistance":in_resistance,
-        "atr_h1":       round(atr_val_h1, 5),
-        # raw zones untuk dipakai di analyze_m15
-        "_sup_zones":   sup_zones,
-        "_res_zones":   res_zones,
+        "open_h1":       round(float(df_h1["open"].iloc[-1]), 4),
+        "high_h1":       round(float(df_h1["high"].iloc[-1]), 4),
+        "low_h1":        round(float(df_h1["low"].iloc[-1]), 4),
+        "close_h1":      round(close, 4),
+        "volume_h1":     round(float(df_h1["volume"].iloc[-1]), 2),
+        "trend_h1":      trend,
+        "ema_50_h1":     round(e50, 4),
+        "ema_200_h1":    round(e200, 4),
+        "in_support":    in_support,
+        "in_resistance": in_resistance,
+        "atr_h1":        round(atr_val_h1, 5),
+        "_sup_zones":    sup_zones,
+        "_res_zones":    res_zones,
     }
 
 
@@ -137,25 +159,49 @@ def analyze_m15(df_m15: pd.DataFrame, sup_zones: list, res_zones: list) -> dict:
     }
 
 
-def get_confluence_score(action: str, h1: dict, m15: dict) -> int:
+def get_confluence_score(action: str, h1: dict, m15: dict, trend_h4: str = "sideways") -> int:
     """
-    Hitung confluence score (0-5) untuk arah buy atau sell.
-    Return score, atau 0 kalau kondisi dasar tidak terpenuhi.
+    Hitung confluence score (0-6) untuk arah buy atau sell.
+
+    Poin:
+      +1  Trend H1 searah
+      +1  H4 tidak berlawanan (sideways atau searah)
+      +1  Harga di S/R zone H1
+      +1  MACD histogram > 0 (buy) atau < 0 (sell)  ← dilonggarkan
+      +1  EMA9/21 M15 searah
+      +1  Candle pattern konfirmasi
+
+    Minimum score 3 untuk signal masuk.
     """
     trend  = h1["trend_h1"]
     in_sup = h1["in_support"]
     in_res = h1["in_resistance"]
 
-    if action == "buy" and trend == "up" and in_sup:
-        score = 2
-        if m15["macd_up"]:               score += 1
-        if m15["ema_bias"] == "buy":     score += 1
-        if m15["has_bull_pattern"]:      score += 1
+    score = 0
+
+    if action == "buy":
+        if trend != "up":
+            return 0
+        # H4 tidak boleh berlawanan (down)
+        if trend_h4 == "down":
+            return 0
+        score += 1                                           # trend H1 up
+        if trend_h4 == "up":             score += 1        # H4 konfirmasi
+        if in_sup:                       score += 1        # di support zone
+        if m15["macd_histogram_m15"] > 0: score += 1      # MACD positif
+        if m15["ema_bias"] == "buy":     score += 1        # EMA9 > EMA21
+        if m15["has_bull_pattern"]:      score += 1        # candle pattern
         return score
 
-    if action == "sell" and trend == "down" and in_res:
-        score = 2
-        if m15["macd_down"]:             score += 1
+    if action == "sell":
+        if trend != "down":
+            return 0
+        if trend_h4 == "up":
+            return 0
+        score += 1
+        if trend_h4 == "down":           score += 1
+        if in_res:                       score += 1
+        if m15["macd_histogram_m15"] < 0: score += 1
         if m15["ema_bias"] == "sell":    score += 1
         if m15["has_bear_pattern"]:      score += 1
         return score

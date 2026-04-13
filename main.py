@@ -8,7 +8,7 @@ from app.config.settings import settings
 
 from app.utils.logger import setup_logger
 from app.modules.trade_signal.usecase import TradeSignalUsecase
-from app.services.telegram import fetch_all_symbols, build_market_analysis, send_telegram
+from app.services.bot_signal_telegram.telegram import fetch_all_symbols, build_market_analysis, send_telegram
 from app.modules.trade_signal.models import TradeSignal       # noqa: F401
 from app.modules.trade_order.models import TradeOrder         # noqa: F401
 from app.modules.candle_pattern.models import CandlePattern   # noqa: F401
