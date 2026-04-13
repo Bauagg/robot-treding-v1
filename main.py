@@ -3,6 +3,8 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import MetaTrader5 as mt5
+from alembic.config import Config as AlembicConfig
+from alembic import command as alembic_command
 from app.config.database import init_db, AsyncSessionLocal
 from app.config.settings import settings
 
@@ -92,6 +94,14 @@ async def check_new_candle():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from loguru import logger
+    try:
+        alembic_cfg = AlembicConfig("alembic.ini")
+        alembic_command.upgrade(alembic_cfg, "head")
+        logger.info("Database migration selesai.")
+    except Exception as e:
+        logger.error(f"Migration gagal: {e}")
+
     await init_db()
 
     scheduler.add_job(check_new_candle, "interval", minutes=1, id="signal_job")
