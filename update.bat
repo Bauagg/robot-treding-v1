@@ -4,8 +4,12 @@ echo === Robot Trading Update ===
 echo.
 
 echo [1/4] Menghentikan bot...
-wmic process where "name='python.exe' and commandline like '%%main.py%%'" delete >nul 2>&1
+wmic process where "name='python.exe'" delete >nul 2>&1
 timeout /t 2 >nul
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do (
+    taskkill /F /PID %%a >nul 2>&1
+)
+echo Bot dihentikan.
 
 echo [2/4] Pull update dari GitHub...
 git pull origin main

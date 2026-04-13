@@ -1,11 +1,13 @@
 @echo off
+cd /d "%~dp0"
 echo Menghentikan Robot Trading...
 
-wmic process where "name='python.exe' and commandline like '%%main.py%%'" delete >nul 2>&1
+wmic process where "name='python.exe'" delete >nul 2>&1
+timeout /t 2 >nul
 
-if %errorlevel% equ 0 (
-    echo Bot berhasil dihentikan.
-) else (
-    echo Bot tidak sedang berjalan.
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do (
+    taskkill /F /PID %%a >nul 2>&1
 )
+
+echo Bot berhasil dihentikan.
 pause
