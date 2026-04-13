@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
@@ -23,6 +22,13 @@ def calculate_macd(
     signal_line = result[f"MACDs_{fast}_{slow}_{signal}"]
     histogram   = result[f"MACDh_{fast}_{slow}_{signal}"]
     return macd_line, signal_line, histogram
+
+
+# ─── OBV ─────────────────────────────────────────────────────────────────────
+
+def calculate_obv(df: pd.DataFrame) -> pd.Series:
+    """On Balance Volume — akumulasi volume berdasarkan arah candle."""
+    return df.ta.obv()
 
 
 # ─── ATR ─────────────────────────────────────────────────────────────────────

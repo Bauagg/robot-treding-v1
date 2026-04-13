@@ -1,6 +1,6 @@
 import json
 from datetime import date, timezone, datetime
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
@@ -48,7 +48,6 @@ async def list_signals(
         try:
             parsed_filters = json.loads(filters)
         except json.JSONDecodeError:
-            from fastapi import HTTPException
             raise HTTPException(status_code=422, detail="filters harus berupa JSON array yang valid")
 
     return await controller.list_signals(

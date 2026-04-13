@@ -8,6 +8,7 @@ from app.config.settings import settings
 
 from app.utils.logger import setup_logger
 from app.modules.trade_signal.usecase import TradeSignalUsecase
+from app.services.telegram import fetch_all_symbols, build_market_analysis, send_telegram
 from app.modules.trade_signal.models import TradeSignal       # noqa: F401
 from app.modules.trade_order.models import TradeOrder         # noqa: F401
 from app.modules.candle_pattern.models import CandlePattern   # noqa: F401
@@ -60,10 +61,11 @@ async def check_new_candle():
             logger.warning("Tidak bisa fetch candle dari MT5")
             return
 
-        # Monitor posisi open setiap poll — update DB kalau sudah close
+        # Monitor posisi open + pending order setiap poll
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 await TradeOrderUsecase().monitor_open_orders(session)
+                await TradeOrderUsecase().monitor_pending_orders(session)
 
         if _last_candle_time is None:
             _last_candle_time = candle_time
@@ -73,6 +75,13 @@ async def check_new_candle():
         if candle_time != _last_candle_time:
             _last_candle_time = candle_time
             logger.info(f"Candle M15 baru terdeteksi: {candle_time}, menjalankan analisa...")
+
+            # Kirim analisis semua symbol ke Telegram (untuk bacaan manual)
+            all_frames = await loop.run_in_executor(None, fetch_all_symbols)
+            for sym, frames in all_frames.items():
+                msg = build_market_analysis(sym, frames)
+                await send_telegram(msg, symbol=sym)
+
             async with AsyncSessionLocal() as session:
                 async with session.begin():
                     await TradeSignalUsecase().get_signal(session)

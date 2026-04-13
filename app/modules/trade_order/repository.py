@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, func
@@ -78,6 +78,25 @@ class TradeOrderRepository:
             "page_size": page_size,
             "pages":     (total + page_size - 1) // page_size,
         }
+
+    async def get_pending_orders(self, symbol: str) -> list[TradeOrder]:
+        """Ambil pending order yang expire_at masih dalam 15 menit ke depan."""
+        now        = datetime.now().replace(microsecond=0)
+        window_end = now + timedelta(minutes=15)
+        result = await self.db.execute(
+            select(TradeOrder).where(
+                TradeOrder.symbol    == symbol,
+                TradeOrder.status    == "pending",
+                TradeOrder.expire_at >  now,
+                TradeOrder.expire_at <= window_end,
+            )
+        )
+        return result.scalars().all()
+
+    async def expire_order(self, order: TradeOrder) -> TradeOrder:
+        order.status = "expired"
+        await self.db.flush()
+        return order
 
     async def get_open_orders(self, symbol: str) -> list[TradeOrder]:
         result = await self.db.execute(

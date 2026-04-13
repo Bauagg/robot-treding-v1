@@ -1,10 +1,13 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 import MetaTrader5 as mt5
+import pandas as pd
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import settings
 from app.modules.trade_order.repository import TradeOrderRepository
+from app.utils.analysis import analyze_h1, analyze_m15, get_confluence_score
 
 
 class TradeOrderUsecase:
@@ -135,20 +138,242 @@ class TradeOrderUsecase:
         result = await loop.run_in_executor(None, self._send_order, action, sl, tp)
 
         record = await repo.save({
-            "signal_id":  signal_id,
-            "symbol":     self.symbol,
-            "action":     action,
-            "lot":        self.lot,
-            "price":      result.get("price", 0.0),
-            "sl":         sl,
-            "tp":         tp,
-            "ticket":     result.get("ticket"),
-            "status":     result["status"],
-            "comment":    result.get("comment"),
-            "created_by": created_by,
+            "signal_id":    signal_id,
+            "symbol":       self.symbol,
+            "action":       action,
+            "lot":          self.lot,
+            "price":        result.get("price", 0.0),
+            "sl":           sl,
+            "tp":           tp,
+            "ticket":       result.get("ticket"),
+            "status":       result["status"],
+            "comment":      result.get("comment"),
+            "created_by":   created_by,
+            "entry_target": None,   # order langsung, tidak pakai target harga
+            "expire_at":    None,   # order langsung, tidak ada expire
         })
 
         return {"order_id": record.id, **result}
+
+    # ─── Public: buat pending order dari user ────────────────────────────────
+
+    async def create_pending_order(
+        self,
+        db: AsyncSession,
+        action: str,
+        entry_target: float,
+        sl: float,
+        tp: float,
+        lot: float,
+        expire_hours: int,
+        symbol: str | None = None,
+        created_by: str = "A. Mambaus Sholihin",
+    ) -> dict:
+        """
+        Simpan pending order ke DB — belum kirim ke MT5.
+        Job monitor akan cek setiap menit, kalau harga >= entry_target
+        dan belum expire maka order dikirim ke MT5.
+
+        symbol: opsional — kalau tidak diisi pakai TRADING_SYMBOL dari env (robot).
+                User bisa isi symbol apapun (GBPUSD, XAUUSD, dll).
+        """
+        sym       = symbol or self.symbol
+        repo      = TradeOrderRepository(db)
+        expire_at = datetime.now(timezone.utc) + timedelta(hours=expire_hours)
+
+        record = await repo.save({
+            "signal_id":    0,
+            "symbol":       sym,
+            "action":       action,
+            "lot":          lot,
+            "price":        0.0,          # diisi saat order tereksekusi
+            "sl":           sl,
+            "tp":           tp,
+            "entry_target": entry_target,
+            "expire_at":    expire_at,
+            "status":       "pending",
+            "created_by":   created_by,
+            "comment":      f"Pending order | target={entry_target} | expire={expire_at.strftime('%Y-%m-%d %H:%M')} UTC",
+        })
+
+        logger.info(
+            f"[{sym}] Pending order dibuat | {action.upper()} | "
+            f"Target: {entry_target} | SL: {sl} | TP: {tp} | Lot: {lot} | "
+            f"Expire: {expire_at.strftime('%Y-%m-%d %H:%M')} UTC | By: {created_by}"
+        )
+        return {"order_id": record.id, "symbol": sym, "status": "pending", "expire_at": expire_at.isoformat()}
+
+    # ─── Public: monitor pending order, eksekusi kalau harga tercapai ────────
+
+    async def monitor_pending_orders(self, db: AsyncSession) -> None:
+        """
+        Cek semua pending order:
+        - Kalau sudah expire → tandai expired
+        - Kalau harga sekarang >= entry_target (buy) atau <= entry_target (sell):
+            - Validasi signal saat ini sesuai arah order (confluence >= 3)
+            - Kalau tidak sesuai → cancel order
+            - Kalau sesuai → kirim order ke MT5
+        """
+        loop = asyncio.get_event_loop()
+        repo = TradeOrderRepository(db)
+
+        pending = await repo.get_pending_orders(self.symbol)
+        if not pending:
+            return
+
+        # Ambil harga + candle data dari MT5 sekaligus
+        def _get_market_data() -> dict | None:
+            ok = mt5.initialize(
+                path=settings.MT5_PATH,
+                login=settings.MT5_LOGIN,
+                password=settings.MT5_PASSWORD,
+                server=settings.MT5_SERVER,
+            )
+            if not ok:
+                return None
+            try:
+                tick = mt5.symbol_info_tick(self.symbol)
+                if tick is None:
+                    return None
+
+                rates_h1  = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_H1,  0, 520)
+                rates_m15 = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M15, 0, 100)
+                if rates_h1 is None or rates_m15 is None:
+                    return None
+
+                df_h1  = pd.DataFrame(rates_h1)
+                df_m15 = pd.DataFrame(rates_m15)
+                df_h1["time"]  = pd.to_datetime(df_h1["time"],  unit="s")
+                df_m15["time"] = pd.to_datetime(df_m15["time"], unit="s")
+                df_h1.rename( columns={"tick_volume": "volume"}, inplace=True)
+                df_m15.rename(columns={"tick_volume": "volume"}, inplace=True)
+
+                return {"price": tick.ask, "df_h1": df_h1, "df_m15": df_m15}
+            finally:
+                mt5.shutdown()
+
+        now         = datetime.now(timezone.utc)
+        market_data = await loop.run_in_executor(None, _get_market_data)
+        if market_data is None:
+            logger.warning(f"[{self.symbol}] Tidak bisa ambil data pasar untuk cek pending order")
+            return
+
+        curr_price = market_data["price"]
+
+        # Hitung signal satu kali untuk semua pending order
+        h1        = analyze_h1(market_data["df_h1"])
+        sup_zones = h1.pop("_sup_zones")
+        res_zones = h1.pop("_res_zones")
+        m15       = analyze_m15(market_data["df_m15"], sup_zones, res_zones)
+
+        for order in pending:
+            # Cek expire
+            if order.expire_at and now >= order.expire_at:
+                await repo.expire_order(order)
+                logger.info(f"[{self.symbol}] Pending order #{order.id} EXPIRED | target={order.entry_target}")
+                continue
+
+            # Cek apakah harga sudah mencapai target
+            target    = order.entry_target
+            triggered = False
+            if order.action == "buy"  and curr_price >= target:
+                triggered = True
+            elif order.action == "sell" and curr_price <= target:
+                triggered = True
+
+            if not triggered:
+                continue
+
+            # Validasi signal — confluence >= 3 sesuai arah order
+            score = get_confluence_score(order.action, h1, m15)
+            if score < 3:
+                order.status  = "cancelled"
+                order.comment = (
+                    f"Cancelled: signal tidak sesuai saat harga={curr_price} | "
+                    f"action={order.action} | score={score}/5 | "
+                    f"trend={h1['trend_h1']} in_sup={h1['in_support']} in_res={h1['in_resistance']}"
+                )
+                await db.flush()
+                logger.warning(
+                    f"[{self.symbol}] Pending order #{order.id} CANCELLED — "
+                    f"signal tidak valid | {order.action.upper()} | score={score}/5 | "
+                    f"trend={h1['trend_h1']}"
+                )
+                continue
+
+            result = await loop.run_in_executor(
+                None, self._send_order, order.action, order.sl, order.tp
+            )
+            order.status  = result["status"]
+            order.price   = result.get("price", 0.0)
+            order.ticket  = result.get("ticket")
+            order.comment = (
+                f"Triggered at {curr_price} | score={score}/5 | {result.get('comment','')}"
+            )
+            await db.flush()
+            logger.success(
+                f"[{self.symbol}] Pending order #{order.id} TRIGGERED | "
+                f"{order.action.upper()} @ {curr_price} | Score: {score}/5 | Ticket: {order.ticket}"
+            )
+
+    # ─── Public: simulasi kalkulasi TP/SL ────────────────────────────────────
+
+    def simulate(
+        self,
+        action: str,
+        entry_price: float,
+        sl: float,
+        tp: float,
+        lot: float,
+        symbol: str | None = None,
+    ) -> dict:
+        """
+        Kalkulasi simulasi risk/reward sebelum order dikirim.
+
+        Menghitung:
+        - Risk (loss kalau SL kena) dalam USD
+        - Reward (profit kalau TP kena) dalam USD
+        - Risk/Reward ratio
+        - Pip distance SL dan TP
+        - Apakah RR minimal 1:1.5 (layak trading)
+
+        symbol: opsional — untuk info saja, tidak mempengaruhi kalkulasi pip.
+        Pip value: 1 pip = $0.10 per 0.01 lot (berlaku untuk pair xxx/USD & XAU/USD pakai pip=0.1)
+        """
+        if action not in ("buy", "sell"):
+            raise ValueError("action harus 'buy' atau 'sell'")
+
+        pip = 0.0001  # 1 pip untuk pair 5-digit
+
+        if action == "buy":
+            sl_pips  = round((entry_price - sl) / pip, 1)
+            tp_pips  = round((tp - entry_price) / pip, 1)
+        else:
+            sl_pips  = round((sl - entry_price) / pip, 1)
+            tp_pips  = round((entry_price - tp) / pip, 1)
+
+        pip_value   = round(lot * 10, 4)          # USD per pip
+        risk_usd    = round(sl_pips * pip_value, 2)
+        reward_usd  = round(tp_pips * pip_value, 2)
+        rr_ratio    = round(tp_pips / sl_pips, 2) if sl_pips > 0 else 0
+        is_valid_rr = rr_ratio >= 1.5
+
+        return {
+            "symbol":        symbol or self.symbol,
+            "action":        action,
+            "entry_price":   entry_price,
+            "sl":            sl,
+            "tp":            tp,
+            "lot":           lot,
+            "sl_pips":       sl_pips,
+            "tp_pips":       tp_pips,
+            "pip_value_usd": pip_value,
+            "risk_usd":      risk_usd,
+            "reward_usd":    reward_usd,
+            "rr_ratio":      rr_ratio,
+            "is_valid_rr":   is_valid_rr,
+            "note":          "RR layak (>= 1:1.5)" if is_valid_rr else "RR terlalu kecil (< 1:1.5), pertimbangkan ulang",
+        }
 
     # ─── Public: monitor posisi open, update DB saat close ───────────────────
 

@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     MT5_SERVER: str = ""
     MT5_PATH: str = r"C:\Program Files\MetaTrader 5\terminal64.exe"
 
+    # Telegram Bot — satu chat_id untuk semua bot (bisa sama atau beda)
+    TELEGRAM_CHAT_ID: str = ""
+
+    # Token per symbol — kosongkan kalau tidak dipakai
+    TELEGRAM_TOKEN_EURUSD: str = ""
+    TELEGRAM_TOKEN_XAUUSD: str = ""
+    TELEGRAM_TOKEN_GBPUSD: str = ""
+    TELEGRAM_TOKEN_USDJPY: str = ""
+    TELEGRAM_TOKEN_BTCUSD: str = ""
+
     # Exchange
     EXCHANGE_NAME: str = "binance"
     API_KEY: str = ""
@@ -40,6 +50,9 @@ class Settings(BaseSettings):
     INITIAL_CAPITAL: float = 1000.0
     MAX_POSITION_SIZE: float = 0.1  # 10% of capital per trade
     LOT_SIZE: float = 0.01           # ukuran lot per order
+
+    # Symbol yang di-analisis Telegram (pisah koma, sesuaikan suffix broker)
+    WATCH_SYMBOLS: str = "EURUSDm,XAUUSDm,GBPUSDm,USDJPYm,BTCUSDm"
 
     class Config:
         env_file = ".env"
