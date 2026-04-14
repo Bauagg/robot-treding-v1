@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     TELEGRAM_CHAT_ID: str = ""
 
     # Token per symbol — kosongkan kalau tidak dipakai
-    TELEGRAM_TOKEN_EURUSD: str = ""
+    TELEGRAM_TOKEN_ETHUSD: str = ""
     TELEGRAM_TOKEN_XAUUSD: str = ""
     TELEGRAM_TOKEN_GBPUSD: str = ""
     TELEGRAM_TOKEN_USDJPY: str = ""
@@ -46,13 +46,13 @@ class Settings(BaseSettings):
     TESTNET: bool = True
 
     # Trading
-    TRADING_SYMBOL: str = "EURUSD"
+    TRADING_SYMBOL: str = "EURUSDm"
     INITIAL_CAPITAL: float = 1000.0
     MAX_POSITION_SIZE: float = 0.1  # 10% of capital per trade
     LOT_SIZE: float = 0.01           # ukuran lot per order
 
     # Symbol yang di-analisis Telegram (pisah koma, sesuaikan suffix broker)
-    WATCH_SYMBOLS: str = "EURUSDm,XAUUSDm,GBPUSDm,USDJPYm,BTCUSDm"
+    WATCH_SYMBOLS: str = "ETHUSDm,XAUUSDm,GBPUSDm,USDJPYm,BTCUSDm"
 
     class Config:
         env_file = ".env"

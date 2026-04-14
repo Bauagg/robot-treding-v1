@@ -29,6 +29,29 @@ def cluster_zones(levels: list[float]) -> list[float]:
     return zones
 
 
+def analyze_d1(df_d1: pd.DataFrame) -> str:
+    """
+    Trend D1 — filter arah besar jangka panjang.
+    Return "up" / "down" / "sideways"
+    Syarat: slope wajib + salah satu (close vs EMA200 ATAU EMA50 vs EMA200).
+    """
+    try:
+        ema50  = calculate_ema(df_d1, 50)
+        ema200 = calculate_ema(df_d1, 200)
+        e50    = float(ema50.iloc[-1])
+        e200   = float(ema200.iloc[-1])
+        slope  = float(ema50.iloc[-1]) - float(ema50.iloc[-4])
+        close  = float(df_d1["close"].iloc[-1])
+
+        if slope > SLOPE_THRESHOLD and (close > e200 or e50 > e200):
+            return "up"
+        if slope < -SLOPE_THRESHOLD and (close < e200 or e50 < e200):
+            return "down"
+    except Exception:
+        pass
+    return "sideways"
+
+
 def analyze_h4(df_h4: pd.DataFrame) -> str:
     """
     Trend H4 — konfirmasi arah besar.
@@ -159,51 +182,60 @@ def analyze_m15(df_m15: pd.DataFrame, sup_zones: list, res_zones: list) -> dict:
     }
 
 
-def get_confluence_score(action: str, h1: dict, m15: dict, trend_h4: str = "sideways") -> int:
+def get_confluence_score(
+    action: str,
+    h1: dict,
+    m15: dict,
+    trend_h4: str = "sideways",
+    trend_d1: str = "sideways",
+) -> int:
     """
-    Hitung confluence score (0-6) untuk arah buy atau sell.
+    Hitung confluence score (0-7) untuk arah buy atau sell.
 
     Poin:
-      +1  Trend H1 searah
-      +1  H4 tidak berlawanan (sideways atau searah)
+      +1  Trend H1 searah          ← wajib, tanpa ini = 0
+      +1  H4 searah atau netral    ← H4 berlawanan = blocker (return 0)
+      +1  D1 searah atau netral    ← D1 berlawanan tegas = blocker (return 0)
       +1  Harga di S/R zone H1
-      +1  MACD histogram > 0 (buy) atau < 0 (sell)  ← dilonggarkan
+      +1  MACD M15 searah          ← berlawanan = -1 penalty
       +1  EMA9/21 M15 searah
       +1  Candle pattern konfirmasi
 
-    Minimum score 3 untuk signal masuk.
+    Minimum score 4 untuk signal masuk.
     """
     trend  = h1["trend_h1"]
     in_sup = h1["in_support"]
     in_res = h1["in_resistance"]
+    macd   = m15["macd_histogram_m15"]
 
     score = 0
 
     if action == "buy":
-        if trend != "up":
-            return 0
-        # H4 tidak boleh berlawanan (down)
-        if trend_h4 == "down":
-            return 0
-        score += 1                                           # trend H1 up
-        if trend_h4 == "up":             score += 1        # H4 konfirmasi
-        if in_sup:                       score += 1        # di support zone
-        if m15["macd_histogram_m15"] > 0: score += 1      # MACD positif
-        if m15["ema_bias"] == "buy":     score += 1        # EMA9 > EMA21
-        if m15["has_bull_pattern"]:      score += 1        # candle pattern
-        return score
+        if trend != "up":       return 0   # H1 wajib
+        if trend_h4 == "down":  return 0   # H4 blocker
+        if trend_d1 == "down":  return 0   # D1 blocker
 
-    if action == "sell":
-        if trend != "down":
-            return 0
-        if trend_h4 == "up":
-            return 0
+        score += 1                                      # H1 up
+        if trend_h4 == "up":    score += 1             # H4 konfirmasi
+        if trend_d1 == "up":    score += 1             # D1 konfirmasi
+        if in_sup:              score += 1             # di support zone
+        if macd > 0:            score += 1             # MACD searah
+        elif macd < 0:          score -= 1             # MACD berlawanan → penalty
+        if m15["ema_bias"] == "buy":   score += 1     # EMA9 > EMA21
+        if m15["has_bull_pattern"]:    score += 1     # candle pattern
+
+    elif action == "sell":
+        if trend != "down":     return 0
+        if trend_h4 == "up":    return 0
+        if trend_d1 == "up":    return 0
+
         score += 1
-        if trend_h4 == "down":           score += 1
-        if in_res:                       score += 1
-        if m15["macd_histogram_m15"] < 0: score += 1
-        if m15["ema_bias"] == "sell":    score += 1
-        if m15["has_bear_pattern"]:      score += 1
-        return score
+        if trend_h4 == "down":  score += 1
+        if trend_d1 == "down":  score += 1
+        if in_res:              score += 1
+        if macd < 0:            score += 1
+        elif macd > 0:          score -= 1             # penalty
+        if m15["ema_bias"] == "sell":  score += 1
+        if m15["has_bear_pattern"]:    score += 1
 
-    return 0
+    return max(0, score)

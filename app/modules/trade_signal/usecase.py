@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import settings
 from app.utils.indicators import classify_candle
-from app.utils.analysis import analyze_h1, analyze_h4, analyze_m15, get_confluence_score
+from app.utils.analysis import analyze_h1, analyze_h4, analyze_m15, get_confluence_score, analyze_d1
 from app.modules.candle_pattern.repository import CandlePatternRepository
 from app.modules.trade_signal.repository import TradeSignalRepository
 from app.modules.trade_order.usecase import TradeOrderUsecase
@@ -86,7 +86,7 @@ class TradeSignalUsecase:
         logger.debug(f"Fetched {len(df)} candles | {self.symbol} {timeframe} | last: {df['time'].iloc[-1]}")
         return df
 
-    def _fetch_all_candles(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def _fetch_all_candles(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         ok = mt5.initialize(
             path=settings.MT5_PATH,
             login=settings.MT5_LOGIN,
@@ -96,10 +96,11 @@ class TradeSignalUsecase:
         if not ok:
             raise RuntimeError(f"MT5 initialize gagal: {mt5.last_error()}")
         try:
+            df_d1  = self._fetch_candles("1d",  count=400)   # 200 + buffer untuk EMA200 D1
             df_h4  = self._fetch_candles("4h",  count=220)   # 200 + buffer konfirmasi H4
             df_h1  = self._fetch_candles("1h",  count=740)   # 720 + buffer (~1 bulan)
             df_m15 = self._fetch_candles("15m", count=100)
-            return df_h4, df_h1, df_m15
+            return df_d1, df_h4, df_h1, df_m15
         finally:
             mt5.shutdown()
 
@@ -111,8 +112,9 @@ class TradeSignalUsecase:
         logger.info(f"[{self.symbol}] Menganalisa sinyal — Precision Strategy")
 
         loop = asyncio.get_event_loop()
-        df_h4, df_h1, df_m15 = await loop.run_in_executor(None, self._fetch_all_candles)
+        df_d1, df_h4, df_h1, df_m15 = await loop.run_in_executor(None, self._fetch_all_candles)
 
+        trend_d1  = analyze_d1(df_d1)
         trend_h4  = analyze_h4(df_h4)
         h1        = analyze_h1(df_h1)
         sup_zones = h1.pop("_sup_zones")
@@ -131,13 +133,13 @@ class TradeSignalUsecase:
         if atr_val < 0.0005:
             logger.info(f"[{self.symbol}] ATR terlalu kecil ({atr_val:.5f}) — skip")
         else:
-            buy_score  = get_confluence_score("buy",  h1, m15, trend_h4)
-            sell_score = get_confluence_score("sell", h1, m15, trend_h4)
+            buy_score  = get_confluence_score("buy",  h1, m15, trend_h4, trend_d1)
+            sell_score = get_confluence_score("sell", h1, m15, trend_h4, trend_d1)
 
-            if buy_score >= 3:
+            if buy_score >= 4:
                 action = "buy"
                 score  = buy_score
-            elif sell_score >= 3:
+            elif sell_score >= 4:
                 action = "sell"
                 score  = sell_score
 

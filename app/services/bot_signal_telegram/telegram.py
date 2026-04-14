@@ -9,9 +9,9 @@ from app.utils.analysis import cluster_zones
 
 
 # Map symbol → nama field token di settings
-# Key pakai prefix tanpa suffix broker (EURUSDm → EURUSD)
+# Key pakai prefix tanpa suffix broker (ETHUSDm → ETHUSD)
 _SYMBOL_TOKEN_MAP = {
-    "EURUSD": "TELEGRAM_TOKEN_EURUSD",
+    "ETHUSD": "TELEGRAM_TOKEN_ETHUSD",
     "XAUUSD": "TELEGRAM_TOKEN_XAUUSD",
     "GBPUSD": "TELEGRAM_TOKEN_GBPUSD",
     "USDJPY": "TELEGRAM_TOKEN_USDJPY",
@@ -68,7 +68,7 @@ def fetch_all_symbols() -> dict[str, dict[str, pd.DataFrame]]:
     """
     Fetch D1/H4/H1/M15 untuk semua symbol di WATCH_SYMBOLS.
     Buka koneksi MT5 satu kali untuk semua symbol.
-    Return: { "EURUSDm": {"D1": df, "H4": df, ...}, ... }
+    Return: { "ETHUSDm": {"D1": df, "H4": df, ...}, ... }
     """
     symbols = [s.strip() for s in settings.WATCH_SYMBOLS.split(",") if s.strip()]
     ok = mt5.initialize(
@@ -406,44 +406,57 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
 
         # ── Hitung signal score (0-6) ──────────────
         # +1 H1 trend searah
-        # +1 H4 searah (bukan berlawanan)
-        # +1 D1 searah (bukan berlawanan)
+        # +1 H4 searah atau netral (sideways ok)
+        # +1 D1 searah atau netral (sideways ok)
         # +1 MACD M15 histogram searah
         # +1 MACD H1 histogram searah
         # +1 Harga di S/R kuat
+        # H4 berlawanan tegas → langsung 0 (blocker)
+        # M15 MACD berlawanan → -1 (penalty momentum entry)
         score = 0
         h1_trend = trends.get("H1", "SIDEWAYS")
         h4_trend = trends.get("H4", "SIDEWAYS")
         d1_trend = trends.get("D1", "SIDEWAYS")
 
+        # MACD M15 dan H1
+        macd_m15_hist = None
+        df_m15_check = frames.get("M15")
+        if df_m15_check is not None and len(df_m15_check) >= 35:
+            _, _, hist = calculate_macd(df_m15_check)
+            macd_m15_hist = float(hist.iloc[-1])
+
+        macd_h1_hist = None
+        df_h1_check = frames.get("H1")
+        if df_h1_check is not None and len(df_h1_check) >= 35:
+            _, _, hist = calculate_macd(df_h1_check)
+            macd_h1_hist = float(hist.iloc[-1])
+
         if side == "BUY":
-            if h1_trend  == "UP":                    score += 1
-            if h4_trend  in ("UP", "SIDEWAYS"):      score += 1
-            if d1_trend  in ("UP", "SIDEWAYS"):      score += 1
-            # MACD M15
-            df_m15_check = frames.get("M15")
-            if df_m15_check is not None and len(df_m15_check) >= 35:
-                _, _, hist = calculate_macd(df_m15_check)
-                if float(hist.iloc[-1]) > 0:         score += 1
-            # MACD H1
-            df_h1_check = frames.get("H1")
-            if df_h1_check is not None and len(df_h1_check) >= 35:
-                _, _, hist = calculate_macd(df_h1_check)
-                if float(hist.iloc[-1]) > 0:         score += 1
-            if sr_strong:                            score += 1
+            if h4_trend == "DOWN":                           # blocker keras
+                score = 0
+            else:
+                if h1_trend == "UP":                         score += 1
+                if h4_trend in ("UP", "SIDEWAYS"):           score += 1
+                if d1_trend in ("UP", "SIDEWAYS"):           score += 1
+                if macd_m15_hist is not None:
+                    if macd_m15_hist > 0:                    score += 1
+                    elif macd_m15_hist < 0:                  score -= 1   # penalty: momentum entry berlawanan
+                if macd_h1_hist is not None and macd_h1_hist > 0: score += 1
+                if sr_strong:                                score += 1
         else:  # SELL
-            if h1_trend  == "DOWN":                  score += 1
-            if h4_trend  in ("DOWN", "SIDEWAYS"):    score += 1
-            if d1_trend  in ("DOWN", "SIDEWAYS"):    score += 1
-            df_m15_check = frames.get("M15")
-            if df_m15_check is not None and len(df_m15_check) >= 35:
-                _, _, hist = calculate_macd(df_m15_check)
-                if float(hist.iloc[-1]) < 0:         score += 1
-            df_h1_check = frames.get("H1")
-            if df_h1_check is not None and len(df_h1_check) >= 35:
-                _, _, hist = calculate_macd(df_h1_check)
-                if float(hist.iloc[-1]) < 0:         score += 1
-            if sr_strong:                            score += 1
+            if h4_trend == "UP":                             # blocker keras
+                score = 0
+            else:
+                if h1_trend == "DOWN":                       score += 1
+                if h4_trend in ("DOWN", "SIDEWAYS"):         score += 1
+                if d1_trend in ("DOWN", "SIDEWAYS"):         score += 1
+                if macd_m15_hist is not None:
+                    if macd_m15_hist < 0:                    score += 1
+                    elif macd_m15_hist > 0:                  score -= 1   # penalty: momentum entry berlawanan
+                if macd_h1_hist is not None and macd_h1_hist < 0: score += 1
+                if sr_strong:                                score += 1
+
+        score = max(0, score)   # tidak boleh negatif
 
         # Hanya tampil kalau score >= 3
         if score < 3:
