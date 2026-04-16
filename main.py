@@ -82,7 +82,8 @@ async def check_new_candle():
             all_frames = await loop.run_in_executor(None, fetch_all_symbols)
             for sym, frames in all_frames.items():
                 msg = build_market_analysis(sym, frames)
-                await send_telegram(msg, symbol=sym)
+                if msg:
+                    await send_telegram(msg, symbol=sym)
 
             async with AsyncSessionLocal() as session:
                 async with session.begin():

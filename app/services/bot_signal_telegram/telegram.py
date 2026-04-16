@@ -191,28 +191,67 @@ def _setup_quality(
     return "⚠️ SETUP LEMAH", 1.5, 1.5
 
 
+def _pip_size(symbol: str) -> float:
+    """
+    Ukuran 1 pip per symbol.
+    Forex 4-digit  : 0.0001  (EURUSD, GBPUSD, dll)
+    JPY pairs      : 0.01
+    XAUUSD (Gold)  : 0.01    (harga 4 digit, 1 pip = $0.01)
+    XAGUSD (Silver): 0.001
+    Crypto BTC     : 1.0
+    Crypto ETH/XRP : 0.1
+    """
+    s = symbol.upper()
+    if "JPY" in s:
+        return 0.01
+    if "XAU" in s:
+        return 0.01
+    if "XAG" in s:
+        return 0.001
+    if "BTC" in s:
+        return 1.0
+    if any(x in s for x in ("ETH", "XRP", "LTC", "BNB")):
+        return 0.1
+    return 0.0001
+
+
+def _price_decimals(symbol: str) -> int:
+    """Jumlah desimal untuk format harga."""
+    s = symbol.upper()
+    if "BTC" in s:
+        return 2
+    if any(x in s for x in ("ETH", "XAU", "XAG")):
+        return 2
+    if "JPY" in s:
+        return 3
+    return 5
+
+
 def _order_calc(
     close: float,
     bias: str,
     atr: float,
     sl_mult: float,
     tp_mult: float,
+    symbol: str = "",
 ) -> dict:
     """Hitung SL dan TP berdasarkan multiplier kualitas setup."""
-    sl_dist = round(atr * sl_mult, 5)
-    tp_dist = round(atr * tp_mult, 5)
-    sl_pip  = round(sl_dist / 0.0001, 1)
-    tp_pip  = round(tp_dist / 0.0001, 1)
-    rr      = round(tp_pip / sl_pip, 2)
+    pip     = _pip_size(symbol)
+    dec     = _price_decimals(symbol)
+    sl_dist = atr * sl_mult
+    tp_dist = atr * tp_mult
+    sl_pip  = round(sl_dist / pip, 1)
+    tp_pip  = round(tp_dist / pip, 1)
+    rr      = round(tp_pip / sl_pip, 2) if sl_pip > 0 else 0
 
     if bias == "BUY":
-        sl = round(close - sl_dist, 5)
-        tp = round(close + tp_dist, 5)
+        sl = round(close - sl_dist, dec)
+        tp = round(close + tp_dist, dec)
     else:
-        sl = round(close + sl_dist, 5)
-        tp = round(close - tp_dist, 5)
+        sl = round(close + sl_dist, dec)
+        tp = round(close - tp_dist, dec)
 
-    return {"sl": sl, "tp": tp, "sl_pip": sl_pip, "tp_pip": tp_pip, "rr": rr}
+    return {"sl": sl, "tp": tp, "sl_pip": sl_pip, "tp_pip": tp_pip, "rr": rr, "dec": dec}
 
 
 def _macd_detail(df: pd.DataFrame) -> dict:
@@ -310,7 +349,7 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
     df_m15 = frames.get("M15")
     if df_m15 is not None and len(df_m15) >= 15:
         atr   = float(calculate_atr(df_m15, 14).iloc[-1])
-        pip   = round(atr / 0.0001, 1)
+        pip   = round(atr / _pip_size(symbol), 1)
         close = float(df_m15["close"].iloc[-1])
         L.append(f"\n<b>Volatilitas</b> ~{pip} pip per candle M15")
 
@@ -458,25 +497,25 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
 
         score = max(0, score)   # tidak boleh negatif
 
-        # Hanya tampil kalau score >= 3
+        # Score < 3 → tidak kirim pesan sama sekali
         if score < 3:
-            L.append("")
-            L.append(f"⛔ Signal lemah ({score}/6) — tidak layak order")
-        else:
-            qlabel, sl_mult, tp_mult = _setup_quality(trends, macd_frames, sr_strong)
-            o = _order_calc(close, side, atr, sl_mult, tp_mult)
+            return ""
 
-            # Bar kekuatan visual
-            filled = "█" * score
-            empty  = "░" * (6 - score)
-            bar    = f"{filled}{empty} {score}/6"
+        qlabel, sl_mult, tp_mult = _setup_quality(trends, macd_frames, sr_strong)
+        o = _order_calc(close, side, atr, sl_mult, tp_mult, symbol)
 
-            L.append("")
-            L.append(f"<b>📌 Kalkulasi {side}</b>  {qlabel}")
-            L.append(f"  Kekuatan : {bar}")
-            L.append(f"  Entry    : {close:.5f}")
-            L.append(f"  SL       : {o['sl']:.5f}  (-{o['sl_pip']} pip)")
-            L.append(f"  TP       : {o['tp']:.5f}  (+{o['tp_pip']} pip)")
-            L.append(f"  R:R      : 1 : {o['rr']}")
+        # Bar kekuatan visual
+        filled = "█" * score
+        empty  = "░" * (6 - score)
+        bar    = f"{filled}{empty} {score}/6"
+
+        L.append("")
+        dec = o["dec"]
+        L.append(f"<b>📌 Kalkulasi {side}</b>  {qlabel}")
+        L.append(f"  Kekuatan : {bar}")
+        L.append(f"  Entry    : {close:.{dec}f}")
+        L.append(f"  SL       : {o['sl']:.{dec}f}  (-{o['sl_pip']:.0f} pip)")
+        L.append(f"  TP       : {o['tp']:.{dec}f}  (+{o['tp_pip']:.0f} pip)")
+        L.append(f"  R:R      : 1 : {o['rr']}")
 
     return "\n".join(L)
