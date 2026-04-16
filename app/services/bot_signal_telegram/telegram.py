@@ -127,7 +127,7 @@ def _trend_label(df: pd.DataFrame) -> str:
     highs = df["high"].values
     lows  = df["low"].values
     n     = len(df)
-    w     = 3   # window kiri & kanan untuk swing
+    w     = 2   # window kiri & kanan untuk swing — lebih sensitif detect HH/HL
 
     swing_highs = []
     swing_lows  = []
@@ -141,11 +141,11 @@ def _trend_label(df: pd.DataFrame) -> str:
     if len(swing_highs) < 2 or len(swing_lows) < 2:
         return "SIDEWAYS"
 
-    # Ambil 2 swing terakhir
-    hh = swing_highs[-1] > swing_highs[-2]   # higher high
-    hl = swing_lows[-1]  > swing_lows[-2]    # higher low
-    lh = swing_highs[-1] < swing_highs[-2]   # lower high
-    ll = swing_lows[-1]  < swing_lows[-2]    # lower low
+    # Ambil 3 swing terakhir untuk konfirmasi lebih solid
+    hh = swing_highs[-1] > swing_highs[-2]
+    hl = swing_lows[-1]  > swing_lows[-2]
+    lh = swing_highs[-1] < swing_highs[-2]
+    ll = swing_lows[-1]  < swing_lows[-2]
 
     if hh and hl:
         return "UP"
