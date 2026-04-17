@@ -90,7 +90,6 @@ class TradeOrderUsecase:
                 return None  # masih open
 
             # Cari di history deals
-            from datetime import datetime, timedelta
             date_from = datetime(2000, 1, 1)
             date_to   = datetime.now() + timedelta(days=1)
             deals = mt5.history_deals_get(date_from, date_to, position=ticket)
@@ -121,18 +120,7 @@ class TradeOrderUsecase:
         created_by: str = "robot",
     ) -> dict:
         loop = asyncio.get_event_loop()
-
-        # Cek posisi terbuka di MT5 dan di DB
-        open_positions = await loop.run_in_executor(None, self._get_open_positions)
-        if open_positions:
-            logger.info(f"[{self.symbol}] Ada {len(open_positions)} posisi terbuka, skip order baru.")
-            return {"status": "skipped", "comment": "posisi masih terbuka"}
-
         repo = TradeOrderRepository(db)
-        open_orders = await repo.get_open_orders(self.symbol)
-        if open_orders:
-            logger.info(f"[{self.symbol}] Ada order open di DB, skip order baru.")
-            return {"status": "skipped", "comment": "order open masih ada di DB"}
 
         # Kirim order baru
         result = await loop.run_in_executor(None, self._send_order, action, sl, tp)

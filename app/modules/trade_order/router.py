@@ -114,6 +114,48 @@ async def simulate_order(
     )
 
 
+@router.get("/test-mt5")
+async def test_mt5_connection():
+    """
+    Test koneksi MT5 dan cek apakah AutoTrading aktif.
+    Tidak mengirim order sungguhan — hanya cek status.
+    """
+    import MetaTrader5 as mt5
+    from app.config.settings import settings
+
+    ok = mt5.initialize(
+        path=settings.MT5_PATH,
+        login=settings.MT5_LOGIN,
+        password=settings.MT5_PASSWORD,
+        server=settings.MT5_SERVER,
+    )
+    if not ok:
+        return {"status": "failed", "error": f"MT5 initialize gagal: {mt5.last_error()}"}
+
+    try:
+        info     = mt5.terminal_info()
+        acc      = mt5.account_info()
+        tick     = mt5.symbol_info_tick(settings.TRADING_SYMBOL)
+
+        auto_trading = bool(info.trade_allowed) if info else False
+        account_trade = bool(acc.trade_allowed) if acc else False
+
+        return {
+            "status":           "connected",
+            "symbol":           settings.TRADING_SYMBOL,
+            "auto_trading":     auto_trading,
+            "account_trade":    account_trade,
+            "ready_to_order":   auto_trading and account_trade,
+            "note":             "✅ Siap order" if (auto_trading and account_trade) else "❌ AutoTrading MATI — aktifkan di MT5 toolbar",
+            "current_price":    {"ask": tick.ask, "bid": tick.bid} if tick else None,
+            "account_balance":  acc.balance if acc else None,
+            "account_equity":   acc.equity if acc else None,
+            "broker":           info.company if info else None,
+        }
+    finally:
+        mt5.shutdown()
+
+
 @router.get("/{order_id}")
 async def get_order_detail(
     order_id: int,

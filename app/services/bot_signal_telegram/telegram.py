@@ -9,13 +9,13 @@ from app.utils.analysis import cluster_zones
 
 
 # Map symbol → nama field token di settings
-# Key pakai prefix tanpa suffix broker (ETHUSDm → ETHUSD)
+# Key pakai prefix tanpa suffix broker (XAUUSDm → XAUUSD)
 _SYMBOL_TOKEN_MAP = {
-    "ETHUSD": "TELEGRAM_TOKEN_ETHUSD",
     "XAUUSD": "TELEGRAM_TOKEN_XAUUSD",
     "GBPUSD": "TELEGRAM_TOKEN_GBPUSD",
     "USDJPY": "TELEGRAM_TOKEN_USDJPY",
-    "BTCUSD": "TELEGRAM_TOKEN_BTCUSD",
+    "USDCAD": "TELEGRAM_TOKEN_USDCAD",
+    "AUDUSD": "TELEGRAM_TOKEN_AUDUSD",
 }
 
 
@@ -92,26 +92,6 @@ def fetch_all_symbols() -> dict[str, dict[str, pd.DataFrame]]:
     finally:
         mt5.shutdown()
 
-
-def fetch_multi_tf(symbol: str) -> dict[str, pd.DataFrame] | None:
-    """Fetch D1, H4, H1, M15 untuk satu symbol. Dipakai oleh monitor_pending_orders."""
-    ok = mt5.initialize(
-        path=settings.MT5_PATH,
-        login=settings.MT5_LOGIN,
-        password=settings.MT5_PASSWORD,
-        server=settings.MT5_SERVER,
-    )
-    if not ok:
-        return None
-    try:
-        return {
-            "D1":  _fetch_df(symbol, mt5.TIMEFRAME_D1,  365),
-            "H4":  _fetch_df(symbol, mt5.TIMEFRAME_H4,  720),
-            "H1":  _fetch_df(symbol, mt5.TIMEFRAME_H1,  720),
-            "M15": _fetch_df(symbol, mt5.TIMEFRAME_M15, 500),
-        }
-    finally:
-        mt5.shutdown()
 
 
 # ─── Analisis per timeframe ───────────────────────────────────────────────────
@@ -395,19 +375,12 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
 
     if up >= 3:
         bias  = "🟢 BUY"
-        saran = f"Cari entry BUY di zona 🔴 Support terdekat"
+        saran = "Cari entry BUY di zona 🔴 Support terdekat"
     elif down >= 3:
         bias  = "🔴 SELL"
-        saran = f"Cari entry SELL di zona 🟢 Resistance terdekat"
-    elif up > down:
-        bias  = "🟡 Cenderung BUY"
-        saran = "Tunggu konfirmasi dulu"
-    elif down > up:
-        bias  = "🟡 Cenderung SELL"
-        saran = "Tunggu konfirmasi dulu"
+        saran = "Cari entry SELL di zona 🟢 Resistance terdekat"
     else:
-        bias  = "⚪ Sideways"
-        saran = "Tidak ada arah jelas, wait and see"
+        return ""   # TF tidak cukup searah — tidak kirim
 
     L.append(f"<b>🎯 {bias}</b>  {up}↑ {down}↓ dari {n} TF")
     L.append(f"  {saran}")

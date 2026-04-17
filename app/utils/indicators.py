@@ -24,13 +24,6 @@ def calculate_macd(
     return macd_line, signal_line, histogram
 
 
-# ─── OBV ─────────────────────────────────────────────────────────────────────
-
-def calculate_obv(df: pd.DataFrame) -> pd.Series:
-    """On Balance Volume — akumulasi volume berdasarkan arah candle."""
-    return df.ta.obv()
-
-
 # ─── ATR ─────────────────────────────────────────────────────────────────────
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:

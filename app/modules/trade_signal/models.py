@@ -14,8 +14,6 @@ class TradeSignal(Base):
     signal:  Mapped[str] = mapped_column(String(10))   # buy / sell / hold
     sl:      Mapped[float | None] = mapped_column(Float, nullable=True)
     tp1:     Mapped[float | None] = mapped_column(Float, nullable=True)
-    tp2:     Mapped[float | None] = mapped_column(Float, nullable=True)
-
     # ── H1 candlestick ────────────────────────────────────────────────────
     open_h1:    Mapped[float] = mapped_column(Float)
     high_h1:    Mapped[float] = mapped_column(Float)
