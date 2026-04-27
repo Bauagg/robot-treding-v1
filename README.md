@@ -81,7 +81,18 @@ LOT_SIZE=0.02
 CREATE DATABASE robot_treding;
 ```
 
-**6. Jalankan bot** — tabel DB dibuat otomatis saat pertama kali start.
+**6. Jalankan migrasi database**
+```bash
+python -m alembic upgrade head
+```
+
+> Kalau ada perubahan model (tambah/hapus kolom), jalankan:
+> ```bash
+> python -m alembic revision --autogenerate -m "deskripsi_perubahan"
+> python -m alembic upgrade head
+> ```
+
+**7. Jalankan bot** — tabel DB dibuat otomatis saat pertama kali start.
 
 ---
 
