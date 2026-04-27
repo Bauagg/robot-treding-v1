@@ -30,6 +30,12 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return df.ta.atr(length=period)
 
 
+# ─── RSI ─────────────────────────────────────────────────────────────────────
+
+def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    return df.ta.rsi(length=period)
+
+
 # ─── Swing High / Low (bahan S/R zone) ───────────────────────────────────────
 
 def find_swing_levels(

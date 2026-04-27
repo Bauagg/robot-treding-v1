@@ -39,9 +39,13 @@ class Settings(BaseSettings):
     TELEGRAM_TOKEN_USDCAD: str = ""
     TELEGRAM_TOKEN_AUDUSD: str = ""
 
-    # Trading
+    # Trading — Robot EURUSD (M15 Precision Strategy)
     TRADING_SYMBOL: str = "EURUSDm"
     LOT_SIZE: float = 0.01
+
+    # Trading — Robot XAUUSD (M5 Strategy)
+    XAUUSD_SYMBOL: str = "XAUUSDm"
+    XAUUSD_LOT_SIZE: float = 0.01
 
     # Symbol yang di-analisis Telegram (pisah koma, sesuaikan suffix broker)
     WATCH_SYMBOLS: str = "XAUUSDm,GBPUSDm,USDJPYm,USDCADm,AUDUSDm"

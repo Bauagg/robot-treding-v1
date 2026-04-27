@@ -12,9 +12,9 @@ from app.utils.analysis import analyze_h1, analyze_m15, get_confluence_score
 
 class TradeOrderUsecase:
 
-    def __init__(self):
-        self.symbol = settings.TRADING_SYMBOL
-        self.lot    = settings.LOT_SIZE
+    def __init__(self, symbol: str | None = None, lot: float | None = None):
+        self.symbol = symbol or settings.TRADING_SYMBOL
+        self.lot    = lot or settings.LOT_SIZE
 
     # ─── Cek posisi terbuka di MT5 ────────────────────────────────────────────
 

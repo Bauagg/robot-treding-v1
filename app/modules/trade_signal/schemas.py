@@ -12,7 +12,6 @@ class TradeSignalResponse(BaseModel):
     signal:  str
     sl:      float | None
     tp1:     float | None
-    tp2:     float | None
 
     # H1 candlestick
     open_h1:   float
@@ -57,7 +56,7 @@ class TradeSignalResponse(BaseModel):
     timestamp_m15: datetime
     created_at:    datetime
 
-    @field_serializer("sl", "tp1", "tp2",
+    @field_serializer("sl", "tp1",
                       "open_h1", "high_h1", "low_h1", "close_h1",
                       "open_m15", "high_m15", "low_m15", "close_m15",
                       "ema_50_h1", "ema_200_h1",
