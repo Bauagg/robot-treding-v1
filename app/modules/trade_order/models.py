@@ -11,6 +11,7 @@ class TradeOrder(Base):
 
     id:          Mapped[int]          = mapped_column(Integer, primary_key=True, autoincrement=True)
     signal_id:   Mapped[int]          = mapped_column(Integer)
+    candle_id:   Mapped[int | None]   = mapped_column(Integer, nullable=True)   # relasi ke candle_patterns
     symbol:      Mapped[str]          = mapped_column(String(20))
     action:      Mapped[str]          = mapped_column(String(10))   # buy / sell
     lot:         Mapped[float]        = mapped_column(Float)

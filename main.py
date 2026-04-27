@@ -96,9 +96,21 @@ async def check_new_candle():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from loguru import logger
-    try:
+    import asyncio
+
+    def _run_migrations():
         alembic_cfg = AlembicConfig("alembic.ini")
-        alembic_command.upgrade(alembic_cfg, "head")
+        # Auto-merge kalau ada multiple heads
+        from alembic.script import ScriptDirectory
+        script = ScriptDirectory.from_config(alembic_cfg)
+        heads = script.get_heads()
+        if len(heads) > 1:
+            alembic_command.merge(alembic_cfg, "heads", message="auto_merge_heads")
+        alembic_command.upgrade(alembic_cfg, "heads")
+
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _run_migrations)
         logger.info("Database migration selesai.")
     except Exception as e:
         logger.error(f"Migration gagal: {e}")

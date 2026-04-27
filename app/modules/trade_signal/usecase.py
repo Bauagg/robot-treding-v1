@@ -144,19 +144,19 @@ class TradeSignalUsecase:
                 score  = sell_score
 
         # ── Adaptive SL/TP berdasarkan score ──
-        # Score 3 → setup lemah  → SL 1.5x, TP 1.5x  (RR 1:1)
-        # Score 4 → setup bagus  → SL 1.2x, TP 2.0x  (RR 1:1.7)
-        # Score 5/6 → setup kuat → SL 1.0x, TP 2.5x  (RR 1:2.5)
+        # Score 4   → SL 1.2x, TP 2.4x  (RR 1:2)
+        # Score 5   → SL 1.0x, TP 2.5x  (RR 1:2.5)
+        # Score 6/7 → SL 0.8x, TP 2.6x  (RR 1:3.25)
         close = m15["close_m15"]
         atr   = m15["atr_m15"]
 
         if action != "hold":
-            if score >= 5:
+            if score >= 6:
+                sl_mult, tp_mult = 0.8, 2.6
+            elif score == 5:
                 sl_mult, tp_mult = 1.0, 2.5
-            elif score == 4:
-                sl_mult, tp_mult = 1.2, 2.0
             else:
-                sl_mult, tp_mult = 1.5, 1.5
+                sl_mult, tp_mult = 1.2, 2.4
 
             if action == "buy":
                 sl  = round(close - sl_mult * atr, 4)
@@ -190,6 +190,11 @@ class TradeSignalUsecase:
             f"SL: {sl} | TP1: {tp1}"
         )
 
+        # ── Hanya simpan signal + candle + order kalau score >= 4 ──
+        if action not in ("buy", "sell"):
+            return result
+
+        # 1. Simpan signal dulu
         repo   = TradeSignalRepository(db)
         record = await repo.save(result)
         logger.success(
@@ -197,9 +202,10 @@ class TradeSignalUsecase:
             f"Signal: {action.upper()} | Score: {score}/6"
         )
 
-        # ── Simpan candle pattern ke DB untuk dataset ML ──
-        candle_info = classify_candle(df_m15)
-        await CandlePatternRepository(db).save({
+        # 2. Simpan candle pattern dengan relasi signal_id
+        candle_info    = classify_candle(df_m15)
+        candle_record  = await CandlePatternRepository(db).save({
+            "signal_id":     record.id,
             "symbol":        self.symbol,
             "timeframe":     "M15",
             "candle_time":   df_m15["time"].iloc[-1],
@@ -217,20 +223,21 @@ class TradeSignalUsecase:
             "in_support":    in_sup,
             "in_resistance": in_res,
             "score":         score,
-            "outcome":       None,  # diisi nanti setelah trade close
+            "outcome":       None,
         })
-        logger.debug(f"[{self.symbol}] Candle pattern tersimpan: {candle_info['pattern_name']}")
+        logger.debug(f"[{self.symbol}] Candle pattern tersimpan: {candle_info['pattern_name']} | ID: {candle_record.id}")
 
-        if action in ("buy", "sell"):
-            order_result = await TradeOrderUsecase().execute(
-                db=db,
-                signal_id=record.id,
-                action=action,
-                sl=sl,
-                tp=tp1,
-                created_by="robot",
-            )
-            logger.info(f"[{self.symbol}] Order result: {order_result}")
+        # 3. Kirim order dengan signal_id + candle_id
+        order_result = await TradeOrderUsecase().execute(
+            db=db,
+            signal_id=record.id,
+            candle_id=candle_record.id,
+            action=action,
+            sl=sl,
+            tp=tp1,
+            created_by="robot",
+        )
+        logger.info(f"[{self.symbol}] Order result: {order_result}")
 
         return result
 

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -9,8 +9,9 @@ from app.config.database import Base
 class CandlePattern(Base):
     __tablename__ = "candle_patterns"
 
-    id:        Mapped[int]      = mapped_column(Integer, primary_key=True, autoincrement=True)
-    symbol:    Mapped[str]      = mapped_column(String(20))
+    id:        Mapped[int]        = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)   # relasi ke trade_signals
+    symbol:    Mapped[str]        = mapped_column(String(20))
     timeframe: Mapped[str]      = mapped_column(String(5))
     candle_time: Mapped[datetime] = mapped_column(DateTime)
 
@@ -39,4 +40,4 @@ class CandlePattern(Base):
     # ── Label ML ─────────────────────────────────────────────────────────────
     outcome: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.utcnow())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
