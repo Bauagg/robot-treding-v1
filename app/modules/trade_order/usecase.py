@@ -76,7 +76,7 @@ class TradeOrderUsecase:
 
     # ─── Cek posisi yang sudah close di MT5 history ───────────────────────────
 
-    def _check_closed_position(self, ticket: int) -> dict | None:
+    def _check_closed_position(self, ticket: int, created_at: datetime) -> dict | None:
         """
         Cek apakah posisi dengan ticket ini sudah close di MT5 history.
         Return dict dengan close_price dan profit, atau None kalau masih open.
@@ -89,16 +89,16 @@ class TradeOrderUsecase:
             if positions and len(positions) > 0:
                 return None  # masih open
 
-            # Cari di history deals
-            date_from = datetime(2000, 1, 1)
+            # Cari di history deals mulai dari tanggal order dibuat (bukan dari 2000)
+            date_from = created_at.replace(tzinfo=None)
             date_to   = datetime.now() + timedelta(days=1)
             deals = mt5.history_deals_get(date_from, date_to, position=ticket)
 
             if not deals or len(deals) == 0:
                 return None
 
-            # Deal terakhir = close deal
-            close_deal = [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT]
+            # Filter by symbol + entry OUT untuk hindari cross-symbol contamination
+            close_deal = [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT and d.symbol == self.symbol]
             if not close_deal:
                 return None
 
@@ -380,7 +380,7 @@ class TradeOrderUsecase:
             return
 
         for order in open_orders:
-            closed = await loop.run_in_executor(None, self._check_closed_position, order.ticket)
+            closed = await loop.run_in_executor(None, self._check_closed_position, order.ticket, order.created_at)
             if closed:
                 await repo.close_order(order, closed["close_price"], closed["profit"])
                 outcome = "PROFIT" if closed["profit"] > 0 else "LOSS"

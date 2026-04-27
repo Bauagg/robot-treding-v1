@@ -1,0 +1,4 @@
+"id","signal_id","symbol","action","lot","price","sl","tp","ticket","status","close_price","profit","outcome","comment","created_by","closed_at","created_at","entry_target","expire_at","candle_id"
+72,916,EURUSDm,buy,0.01,1.1750000000000003,1.1742,1.176,4340081338,closed,1.1742,-0.8,loss,robot-trading,robot,2026-04-27 13:46:16.956,2026-04-27 13:15:07.184,,,
+71,915,EURUSDm,buy,0.01,1.1745,1.1738,1.1755,4339958407,closed,1.1738,-0.72,loss,robot-trading,robot,2026-04-27 13:55:16.950,2026-04-27 13:00:23.319,,,
+70,911,EURUSDm,buy,0.01,1.1749800000000001,1.1743,1.176,4339753762,closed,4694.246,-6.32,loss,robot-trading,robot,2026-04-27 13:02:05.388,2026-04-27 12:30:07.234,,,
