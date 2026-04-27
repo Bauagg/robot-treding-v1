@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import BigInteger, DateTime, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.config.database import Base
@@ -17,7 +17,7 @@ class TradeOrder(Base):
     price:       Mapped[float]        = mapped_column(Float)        # harga open
     sl:          Mapped[float | None] = mapped_column(Float, nullable=True)
     tp:          Mapped[float | None] = mapped_column(Float, nullable=True)
-    ticket:       Mapped[int | None]   = mapped_column(Integer, nullable=True)   # MT5 ticket
+    ticket:       Mapped[int | None]   = mapped_column(BigInteger, nullable=True)   # MT5 ticket
     status:       Mapped[str]          = mapped_column(String(20))   # pending / open / closed / failed / expired
     entry_target: Mapped[float | None] = mapped_column(Float, nullable=True)    # harga target entry (pending order)
     expire_at:    Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # batas waktu pending order
