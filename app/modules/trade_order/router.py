@@ -4,13 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
 from app.modules.trade_order.controller import TradeOrderController
+from app.modules.trade_order.schemas import TradeOrderListResponse, TradeOrderResponse
 
 router = APIRouter(prefix="/trade-orders", tags=["Trade Order"])
 
 controller = TradeOrderController()
 
 
-@router.get("")
+@router.get("", response_model=TradeOrderListResponse)
 async def list_orders(
     db: AsyncSession = Depends(get_db),
     page: int = Query(default=1, ge=1, description="Halaman"),
@@ -156,7 +157,7 @@ async def test_mt5_connection():
         mt5.shutdown()
 
 
-@router.get("/{order_id}")
+@router.get("/{order_id}", response_model=TradeOrderResponse)
 async def get_order_detail(
     order_id: int,
     db: AsyncSession = Depends(get_db),

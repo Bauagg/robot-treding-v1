@@ -1,5 +1,9 @@
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
+
+
+def _fmt(v: float | None, decimals: int) -> str | None:
+    return f"{v:.{decimals}f}" if v is not None else None
 
 
 class TradeSignalResponse(BaseModel):
@@ -52,6 +56,18 @@ class TradeSignalResponse(BaseModel):
     timestamp_h1:  datetime
     timestamp_m15: datetime
     created_at:    datetime
+
+    @field_serializer("sl", "tp1", "tp2",
+                      "open_h1", "high_h1", "low_h1", "close_h1",
+                      "open_m15", "high_m15", "low_m15", "close_m15",
+                      "ema_50_h1", "ema_200_h1",
+                      "ema_9_m15", "ema_21_m15")
+    def fmt_price(self, v: float | None) -> str | None:
+        return _fmt(v, 5)
+
+    @field_serializer("atr_h1", "atr_m15", "macd_histogram_m15", "macd_slope")
+    def fmt_indicator(self, v: float | None) -> str | None:
+        return _fmt(v, 6)
 
     model_config = {"from_attributes": True}
 

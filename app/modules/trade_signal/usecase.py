@@ -180,6 +180,8 @@ class TradeSignalUsecase:
                and not k.startswith("has_") and not k.startswith("near_")},
         }
 
+        sl_str  = f"{sl:.5f}"  if sl  is not None else "None"
+        tp1_str = f"{tp1:.5f}" if tp1 is not None else "None"
         logger.info(
             f"[{self.symbol}] Signal: {action.upper()} | Score: {score}/6 | "
             f"Trend H1: {trend} | InSup: {in_sup} | InRes: {in_res} | "
@@ -187,7 +189,7 @@ class TradeSignalUsecase:
             f"MACD_up={m15['macd_up']} MACD_dn={m15['macd_down']} "
             f"EMA_bias={m15['ema_bias']} Pattern_bull={m15['has_bull_pattern']} "
             f"Pattern_bear={m15['has_bear_pattern']} | "
-            f"SL: {sl} | TP1: {tp1}"
+            f"SL: {sl_str} | TP1: {tp1_str}"
         )
 
         # ── Hanya simpan signal + candle + order kalau score >= 4 ──

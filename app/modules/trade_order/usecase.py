@@ -66,8 +66,8 @@ class TradeOrderUsecase:
                 return {"status": "failed", "ticket": None, "price": fill_price, "comment": f"retcode={retcode} {comment}"}
 
             logger.success(
-                f"Order sukses | {action.upper()} {self.lot} lot {self.symbol} "
-                f"@ {result.price} | Ticket: {result.order}"
+                f"Order sukses | {action.upper()} {self.lot:.2f} lot {self.symbol} "
+                f"@ {result.price:.5f} | Ticket: {result.order}"
             )
             return {"status": "open", "ticket": result.order, "price": result.price, "comment": result.comment}
 
@@ -386,5 +386,5 @@ class TradeOrderUsecase:
                 outcome = "PROFIT" if closed["profit"] > 0 else "LOSS"
                 logger.success(
                     f"[{self.symbol}] Order #{order.ticket} CLOSED | "
-                    f"{outcome}: {closed['profit']} | Close price: {closed['close_price']}"
+                    f"{outcome}: {closed['profit']:.2f} | Close price: {closed['close_price']:.5f}"
                 )
