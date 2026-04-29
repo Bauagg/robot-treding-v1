@@ -47,7 +47,7 @@ from app.modules.trade_signal_xauusd.repository import TradeSignalXauusdReposito
 from app.modules.candle_pattern.repository import CandlePatternRepository
 from app.modules.trade_order.usecase import TradeOrderUsecase
 
-ATR_MIN   = 0.50   # minimal 50 sen volatilitas
+ATR_MIN   = 3.0    # dari data real: ATR < 3.0 WR hanya 31.9%, >= 3.0 WR 43%
 SCORE_MIN = 5      # hanya order kalau score >= 5
 
 
@@ -222,12 +222,15 @@ class TradeSignalXauusdUsecase:
         res_zones = h1.pop("_res_zones")
         m5        = self._analyze_m5(df_m5, sup_zones, res_zones)
 
-        atr_val = m5["atr_m5"]
-        action  = "hold"
-        score   = 0
+        atr_val      = m5["atr_m5"]
+        pattern_name = classify_candle(df_m5)["pattern_name"]
+        action       = "hold"
+        score        = 0
 
         if atr_val < ATR_MIN:
             logger.info(f"[{self.symbol}] ATR M5 terlalu kecil ({atr_val:.4f}) — skip")
+        elif pattern_name == "doji":
+            logger.info(f"[{self.symbol}] Candle doji — skip (dari data: doji WR 23.8%)")
         else:
             buy_score  = self._score("buy",  h1, m5, trend_h4)
             sell_score = self._score("sell", h1, m5, trend_h4)
