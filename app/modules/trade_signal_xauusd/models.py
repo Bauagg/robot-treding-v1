@@ -36,12 +36,20 @@ class TradeSignalXauusd(Base):
     rsi_m5:     Mapped[float] = mapped_column(Float)
     atr_m5:     Mapped[float] = mapped_column(Float)
 
+    # ── M5 additional indicators ─────────────────────────────────────────────
+    bbw: Mapped[float | None] = mapped_column(Float, nullable=True)  # BB Width %
+
     # ── Candle pattern ───────────────────────────────────────────────────────
     has_bull_pattern: Mapped[bool] = mapped_column(Boolean, default=False)
     has_bear_pattern: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # ── H1 momentum filter ───────────────────────────────────────────────────
+    rsi_h1:  Mapped[float | None] = mapped_column(Float, nullable=True)  # RSI 14 H1
+    adx_h1:  Mapped[float | None] = mapped_column(Float, nullable=True)  # ADX 14 H1
+
     # ── Confluence score ─────────────────────────────────────────────────────
-    score: Mapped[int] = mapped_column(Integer, default=0)   # 0–6
+    score:   Mapped[int] = mapped_column(Integer, default=0)   # 0–6
+    jam_utc: Mapped[int | None] = mapped_column(Integer, nullable=True)  # jam entry UTC
 
     # ── Timestamps ──────────────────────────────────────────────────────────
     timestamp_h1: Mapped[datetime] = mapped_column(DateTime)

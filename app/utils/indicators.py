@@ -36,6 +36,22 @@ def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return df.ta.rsi(length=period)
 
 
+# ─── ADX ─────────────────────────────────────────────────────────────────────
+
+def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    return df.ta.adx(length=period)[f"ADX_{period}"]
+
+
+# ─── BB Width ────────────────────────────────────────────────────────────────
+
+def calculate_bbw(df: pd.DataFrame, period: int = 20, std: float = 2.0) -> float:
+    bb  = df.ta.bbands(length=period, std=std)
+    bbu = bb[[c for c in bb.columns if c.startswith("BBU")][0]].iloc[-1]
+    bbl = bb[[c for c in bb.columns if c.startswith("BBL")][0]].iloc[-1]
+    bbm = bb[[c for c in bb.columns if c.startswith("BBM")][0]].iloc[-1]
+    return float((bbu - bbl) / bbm * 100) if bbm != 0 else 0.0
+
+
 # ─── Swing High / Low (bahan S/R zone) ───────────────────────────────────────
 
 def find_swing_levels(

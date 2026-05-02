@@ -4,11 +4,13 @@ XAUUSD 5m Scalping Strategy
 H1 (500 candle) — Trend filter
   • EMA50 slope + harga vs EMA200 → trend UP / DOWN / SIDEWAYS
   • Swing H1 → zona Support / Resistance
+  • RSI H1 norm > 20 (searah trend kuat)
+  • ADX H1 >= 32 (trend kuat, bukan sideways)
 
 M5 — Entry timing
   • EMA50 > EMA200 (golden cross area)
-  • Harga retrace / bounce ke zona EMA50 M5
   • RSI > 50 (buy) / RSI < 50 (sell)
+  • BB Width 1%-3% (volatilitas optimal)
   • Bullish / bearish engulfing (atau pin bar / marubozu)
 
 Score (0-6):
@@ -20,11 +22,18 @@ Score (0-6):
   +1  Candle pattern konfirmasi
   Signal masuk kalau score >= 5
 
+Filter tambahan (ADVANCED — dari backtest 97k candle):
+  • Skip jam 10,11,16,17 UTC (WR buruk)
+  • BB Width harus 1%-3%
+  • RSI H1 norm > 20  (RSI H1 searah trend, min 20 poin dari midline)
+  • ADX H1 >= 32      (trend H1 kuat)
+  Hasil: WR ~54%, PF 2.38
+
 SL/TP:
   SL = 1.0 × ATR M5
   TP = 2.0 × ATR M5  (RR 1:2)
 
-ATR filter: minimal 0.5 (XAUUSD ~50 sen)
+ATR filter: minimal 3.0 (dari backtest: ATR < 3.0 WR 31.9%)
 """
 
 import asyncio
@@ -38,6 +47,8 @@ from app.utils.indicators import (
     calculate_ema,
     calculate_atr,
     calculate_rsi,
+    calculate_adx,
+    calculate_bbw,
     find_swing_levels,
     detect_candle_pattern,
     classify_candle,
@@ -47,8 +58,13 @@ from app.modules.trade_signal_xauusd.repository import TradeSignalXauusdReposito
 from app.modules.candle_pattern.repository import CandlePatternRepository
 from app.modules.trade_order.usecase import TradeOrderUsecase
 
-ATR_MIN   = 3.0    # dari data real: ATR < 3.0 WR hanya 31.9%, >= 3.0 WR 43%
-SCORE_MIN = 5      # hanya order kalau score >= 5
+ATR_MIN          = 3.0   # dari backtest: ATR < 3.0 WR hanya 31.9%
+SCORE_MIN        = 5     # hanya order kalau score >= 5
+BAD_HOURS_UTC    = {10, 11, 16, 17}   # jam WR buruk dari backtest
+BBW_MIN          = 1.0   # BB Width minimum %
+BBW_MAX          = 3.0   # BB Width maksimum %
+RSI_H1_NORM_MIN  = 20    # RSI H1 harus min 20 poin searah trend dari midline 50
+ADX_H1_MIN       = 32    # ADX H1 harus >= 32 (trend kuat)
 
 
 class TradeSignalXauusdUsecase:
@@ -107,6 +123,7 @@ class TradeSignalXauusdUsecase:
         near_ema50 = abs(close - e50) <= 1.5 * atr_val
 
         has_bull, has_bear = detect_candle_pattern(df_m5)
+        bbw_val = calculate_bbw(df_m5, period=20, std=2.0)
 
         return {
             "open_m5":          round(o_val, 2),
@@ -118,9 +135,10 @@ class TradeSignalXauusdUsecase:
             "ema_200_m5":       round(e200, 2),
             "rsi_m5":           round(rsi_val, 2),
             "atr_m5":           round(atr_val, 4),
+            "bbw":              round(bbw_val, 4),
             "near_ema50":       near_ema50,
-            "ema_cross_bull":   e50 > e200,   # golden cross area
-            "ema_cross_bear":   e50 < e200,   # death cross area
+            "ema_cross_bull":   e50 > e200,
+            "ema_cross_bear":   e50 < e200,
             "has_bull_pattern": has_bull,
             "has_bear_pattern": has_bear,
         }
@@ -175,10 +193,14 @@ class TradeSignalXauusdUsecase:
         ema50  = calculate_ema(df_h1, 50)
         ema200 = calculate_ema(df_h1, 200)
         atr_h1 = calculate_atr(df_h1, 14)
+        rsi_h1 = calculate_rsi(df_h1, 14)
+        adx_h1 = calculate_adx(df_h1, 14)
 
         e50        = float(ema50.iloc[-1])
         e200       = float(ema200.iloc[-1])
         atr_val_h1 = float(atr_h1.iloc[-1])
+        rsi_val_h1 = float(rsi_h1.iloc[-1])
+        adx_val_h1 = float(adx_h1.iloc[-1])
         slope      = float(ema50.iloc[-1]) - float(ema50.iloc[-4])
         close      = float(df_h1["close"].iloc[-1])
 
@@ -193,7 +215,7 @@ class TradeSignalXauusdUsecase:
         res_zones = cluster_zones(res_levels)
         sup_zones = cluster_zones(sup_levels)
 
-        thr           = 2.0 * atr_val_h1   # XAUUSD lebih volatile
+        thr           = 2.0 * atr_val_h1
         in_resistance = any(abs(close - z) <= thr for z in res_zones)
         in_support    = any(abs(close - z) <= thr for z in sup_zones)
 
@@ -204,6 +226,8 @@ class TradeSignalXauusdUsecase:
             "in_support":    in_support,
             "in_resistance": in_resistance,
             "atr_h1":        round(atr_val_h1, 4),
+            "rsi_h1":        round(rsi_val_h1, 2),
+            "adx_h1":        round(adx_val_h1, 2),
             "_sup_zones":    sup_zones,
             "_res_zones":    res_zones,
         }
@@ -223,14 +247,37 @@ class TradeSignalXauusdUsecase:
         m5        = self._analyze_m5(df_m5, sup_zones, res_zones)
 
         atr_val      = m5["atr_m5"]
+        bbw_val      = m5["bbw"]
         pattern_name = classify_candle(df_m5)["pattern_name"]
         action       = "hold"
         score        = 0
+        jam_utc      = df_m5["time"].iloc[-1].hour
+
+        # ── Filter ADVANCED (dari backtest 97k candle, WR ~54%) ──────────────
+        rsi_h1_val  = h1["rsi_h1"]
+        adx_h1_val  = h1["adx_h1"]
+        trend_h1    = h1["trend_h1"]
+
+        # RSI H1 norm = jarak RSI dari midline 50, searah trend
+        if trend_h1 == "down":
+            rsi_h1_norm = 50 - rsi_h1_val
+        elif trend_h1 == "up":
+            rsi_h1_norm = rsi_h1_val - 50
+        else:
+            rsi_h1_norm = 0.0
 
         if atr_val < ATR_MIN:
             logger.info(f"[{self.symbol}] ATR M5 terlalu kecil ({atr_val:.4f}) — skip")
         elif pattern_name == "doji":
-            logger.info(f"[{self.symbol}] Candle doji — skip (dari data: doji WR 23.8%)")
+            logger.info(f"[{self.symbol}] Candle doji — skip (doji WR 23.8%)")
+        elif jam_utc in BAD_HOURS_UTC:
+            logger.info(f"[{self.symbol}] Jam {jam_utc} UTC diblokir — skip (WR buruk)")
+        elif not (BBW_MIN <= bbw_val < BBW_MAX):
+            logger.info(f"[{self.symbol}] BBW {bbw_val:.2f}% di luar range {BBW_MIN}-{BBW_MAX}% — skip")
+        elif rsi_h1_norm <= RSI_H1_NORM_MIN:
+            logger.info(f"[{self.symbol}] RSI H1 norm {rsi_h1_norm:.1f} <= {RSI_H1_NORM_MIN} — skip (momentum H1 lemah)")
+        elif adx_h1_val < ADX_H1_MIN:
+            logger.info(f"[{self.symbol}] ADX H1 {adx_h1_val:.1f} < {ADX_H1_MIN} — skip (trend H1 lemah/sideways)")
         else:
             buy_score  = self._score("buy",  h1, m5, trend_h4)
             sell_score = self._score("sell", h1, m5, trend_h4)
@@ -263,6 +310,7 @@ class TradeSignalXauusdUsecase:
             "sl":           sl,
             "tp1":          tp1,
             "score":        score,
+            "jam_utc":      jam_utc,
             "timestamp_h1": df_h1["time"].iloc[-1],
             "timestamp_m5": df_m5["time"].iloc[-1],
             **h1,
@@ -275,10 +323,10 @@ class TradeSignalXauusdUsecase:
         logger.info(
             f"[{self.symbol}] Signal: {action.upper()} | Score: {score}/6 | "
             f"Trend H1: {h1['trend_h1']} | H4: {trend_h4} | "
+            f"RSI_H1: {rsi_h1_val:.1f} (norm {rsi_h1_norm:.1f}) | ADX_H1: {adx_h1_val:.1f} | "
+            f"BBW: {bbw_val:.2f}% | Jam UTC: {jam_utc} | "
             f"InSup: {h1['in_support']} | InRes: {h1['in_resistance']} | "
-            f"EMA cross bull={m5['ema_cross_bull']} | RSI={m5['rsi_m5']:.1f} | "
-            f"Pattern bull={m5['has_bull_pattern']} bear={m5['has_bear_pattern']} | "
-            f"ATR: {atr_val:.4f} | SL: {sl_str} | TP1: {tp1_str}"
+            f"RSI M5: {m5['rsi_m5']:.1f} | ATR: {atr_val:.4f} | SL: {sl_str} | TP1: {tp1_str}"
         )
 
         if action not in ("buy", "sell"):
