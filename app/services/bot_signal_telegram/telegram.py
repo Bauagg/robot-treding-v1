@@ -373,10 +373,10 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
     down = sum(1 for t in trends.values() if t == "DOWN")
     n    = len(trends)
 
-    if up >= 3:
+    if up >= 4:
         bias  = "🟢 BUY"
         saran = "Cari entry BUY di zona 🔴 Support terdekat"
-    elif down >= 3:
+    elif down >= 4:
         bias  = "🔴 SELL"
         saran = "Cari entry SELL di zona 🟢 Resistance terdekat"
     else:
@@ -470,8 +470,8 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
 
         score = max(0, score)   # tidak boleh negatif
 
-        # Score < 3 → tidak kirim pesan sama sekali
-        if score < 3:
+        # Score < 4 → tidak kirim pesan sama sekali
+        if score < 4:
             return ""
 
         qlabel, sl_mult, tp_mult = _setup_quality(trends, macd_frames, sr_strong)
