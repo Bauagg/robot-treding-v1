@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # Symbol yang di-analisis Telegram (pisah koma, sesuaikan suffix broker)
     WATCH_SYMBOLS: str = "XAUUSDm,GBPUSDm,USDJPYm,USDCADm,AUDUSDm"
 
+    # Pending LIMIT (pullback entry) — berapa lama menunggu harga retrace
+    LIMIT_EXPIRE_MINUTES_M15: int = 45   # EURUSD: 3 candle M15
+    LIMIT_EXPIRE_MINUTES_M5:  int = 15   # XAUUSD: 3 candle M5
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

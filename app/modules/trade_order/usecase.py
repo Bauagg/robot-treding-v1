@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config.settings import settings
 from app.modules.trade_order.repository import TradeOrderRepository
 from app.utils.analysis import analyze_h1, analyze_m15, get_confluence_score
+from app.utils.indicators import pip_size, pip_value_usd
 
 
 class TradeOrderUsecase:
@@ -145,6 +146,47 @@ class TradeOrderUsecase:
 
         return {"order_id": record.id, **result}
 
+    async def execute_without_save(
+        self,
+        action: str,
+        sl: float | None,
+        tp: float | None,
+    ) -> dict:
+        """Kirim order ke MT5 tanpa simpan ke DB — dipakai sebelum signal disimpan."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._send_order, action, sl, tp)
+
+    async def save_order(
+        self,
+        db: AsyncSession,
+        signal_id: int,
+        candle_id: int | None,
+        action: str,
+        sl: float | None,
+        tp: float | None,
+        order_result: dict,
+        created_by: str = "robot",
+    ) -> dict:
+        """Simpan order yang sudah confirmed open ke DB."""
+        repo   = TradeOrderRepository(db)
+        record = await repo.save({
+            "signal_id":    signal_id,
+            "candle_id":    candle_id,
+            "symbol":       self.symbol,
+            "action":       action,
+            "lot":          self.lot,
+            "price":        order_result.get("price", 0.0),
+            "sl":           sl,
+            "tp":           tp,
+            "ticket":       order_result.get("ticket"),
+            "status":       order_result["status"],
+            "comment":      order_result.get("comment"),
+            "created_by":   created_by,
+            "entry_target": None,
+            "expire_at":    None,
+        })
+        return {"order_id": record.id, **order_result}
+
     # ─── Public: buat pending order dari user ────────────────────────────────
 
     async def create_pending_order(
@@ -182,6 +224,7 @@ class TradeOrderUsecase:
             "entry_target": entry_target,
             "expire_at":    expire_at,
             "status":       "pending",
+            "order_kind":   "stop",       # trigger saat harga MELEWATI target (breakout)
             "created_by":   created_by,
             "comment":      f"Pending order | target={entry_target} | expire={expire_at.strftime('%Y-%m-%d %H:%M')} UTC",
         })
@@ -192,6 +235,51 @@ class TradeOrderUsecase:
             f"Expire: {expire_at.strftime('%Y-%m-%d %H:%M')} UTC | By: {created_by}"
         )
         return {"order_id": record.id, "symbol": sym, "status": "pending", "expire_at": expire_at.isoformat()}
+
+    # ─── Public: buat pending LIMIT (pullback entry dari robot) ──────────────
+
+    async def create_pending_limit(
+        self,
+        db: AsyncSession,
+        signal_id: int,
+        candle_id: int | None,
+        action: str,
+        entry_target: float,
+        sl: float,
+        tp: float,
+        expire_at: datetime,
+        created_by: str = "robot",
+    ) -> dict:
+        """
+        Pending LIMIT order — entry saat harga RETRACE ke target (bukan chasing).
+        BUY LIMIT keisi saat harga turun ke target, SELL LIMIT saat harga naik.
+        Job monitor (monitor_pending_orders) yang mengeksekusi saat target tercapai
+        dan signal masih valid. Belum dikirim ke MT5 di sini.
+        """
+        repo   = TradeOrderRepository(db)
+        record = await repo.save({
+            "signal_id":    signal_id,
+            "candle_id":    candle_id,
+            "symbol":       self.symbol,
+            "action":       action,
+            "lot":          self.lot,
+            "price":        0.0,           # diisi saat order tereksekusi
+            "sl":           sl,
+            "tp":           tp,
+            "entry_target": entry_target,
+            "expire_at":    expire_at,
+            "status":       "pending",
+            "order_kind":   "limit",       # trigger saat harga RETRACE ke target
+            "created_by":   created_by,
+            "comment":      f"Pending LIMIT | target={entry_target} | expire={expire_at.strftime('%Y-%m-%d %H:%M')} UTC",
+        })
+
+        logger.info(
+            f"[{self.symbol}] Pending LIMIT dibuat | {action.upper()} | "
+            f"Entry retrace: {entry_target} | SL: {sl} | TP: {tp} | Lot: {self.lot} | "
+            f"Expire: {expire_at.strftime('%Y-%m-%d %H:%M')} UTC"
+        )
+        return {"order_id": record.id, "symbol": self.symbol, "status": "pending", "kind": "limit"}
 
     # ─── Public: monitor pending order, eksekusi kalau harga tercapai ────────
 
@@ -263,30 +351,41 @@ class TradeOrderUsecase:
                 logger.info(f"[{self.symbol}] Pending order #{order.id} EXPIRED | target={order.entry_target}")
                 continue
 
-            # Cek apakah harga sudah mencapai target
-            target    = order.entry_target
-            triggered = False
-            if order.action == "buy"  and curr_price >= target:
-                triggered = True
-            elif order.action == "sell" and curr_price <= target:
-                triggered = True
+            # Cek apakah harga sudah mencapai target.
+            # LIMIT (pullback entry): BUY keisi saat harga TURUN ke target,
+            #                         SELL keisi saat harga NAIK ke target.
+            # STOP/market (breakout) : kebalikannya.
+            target     = order.entry_target
+            order_kind = getattr(order, "order_kind", None) or "stop"
+            triggered  = False
+            if order_kind == "limit":
+                if order.action == "buy"  and curr_price <= target:
+                    triggered = True
+                elif order.action == "sell" and curr_price >= target:
+                    triggered = True
+            else:  # stop / market — perilaku lama
+                if order.action == "buy"  and curr_price >= target:
+                    triggered = True
+                elif order.action == "sell" and curr_price <= target:
+                    triggered = True
 
             if not triggered:
                 continue
 
-            # Validasi signal — confluence >= 3 sesuai arah order
+            # Validasi signal — confluence minimal sesuai arah order (skala 0-9,
+            # tanpa H4/D1 jadi maksimal lebih rendah; 4 = momentum + struktur ok)
             score = get_confluence_score(order.action, h1, m15)
-            if score < 3:
+            if score < 4:
                 order.status  = "cancelled"
                 order.comment = (
                     f"Cancelled: signal tidak sesuai saat harga={curr_price} | "
-                    f"action={order.action} | score={score}/5 | "
+                    f"action={order.action} | score={score}/9 | "
                     f"trend={h1['trend_h1']} in_sup={h1['in_support']} in_res={h1['in_resistance']}"
                 )
                 await db.flush()
                 logger.warning(
                     f"[{self.symbol}] Pending order #{order.id} CANCELLED — "
-                    f"signal tidak valid | {order.action.upper()} | score={score}/5 | "
+                    f"signal tidak valid | {order.action.upper()} | score={score}/9 | "
                     f"trend={h1['trend_h1']}"
                 )
                 continue
@@ -298,7 +397,7 @@ class TradeOrderUsecase:
             order.price   = result.get("price", 0.0)
             order.ticket  = result.get("ticket")
             order.comment = (
-                f"Triggered at {curr_price} | score={score}/5 | {result.get('comment','')}"
+                f"Triggered at {curr_price} | score={score}/9 | {result.get('comment','')}"
             )
             await db.flush()
             logger.success(
@@ -333,7 +432,8 @@ class TradeOrderUsecase:
         if action not in ("buy", "sell"):
             raise ValueError("action harus 'buy' atau 'sell'")
 
-        pip = 0.0001  # 1 pip untuk pair 5-digit
+        sym = symbol or self.symbol
+        pip = pip_size(sym)
 
         if action == "buy":
             sl_pips  = round((entry_price - sl) / pip, 1)
@@ -342,7 +442,7 @@ class TradeOrderUsecase:
             sl_pips  = round((sl - entry_price) / pip, 1)
             tp_pips  = round((entry_price - tp) / pip, 1)
 
-        pip_value   = round(lot * 10, 4)          # USD per pip
+        pip_value   = round(pip_value_usd(sym, lot), 4)   # USD per pip, per symbol
         risk_usd    = round(sl_pips * pip_value, 2)
         reward_usd  = round(tp_pips * pip_value, 2)
         rr_ratio    = round(tp_pips / sl_pips, 2) if sl_pips > 0 else 0

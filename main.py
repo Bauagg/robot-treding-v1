@@ -69,13 +69,17 @@ async def check_new_candle():
             logger.warning("Tidak bisa fetch candle dari MT5")
             return
 
-        # Monitor posisi open + pending order setiap poll (kedua robot)
+        # Monitor posisi open + pending order + pending LIMIT setiap poll (kedua robot).
+        # LIMIT entry dicek tiap menit karena retrace bisa terjadi kapan saja,
+        # tidak perlu menunggu candle baru.
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 await TradeOrderUsecase().monitor_open_orders(session)
                 await TradeOrderUsecase().monitor_pending_orders(session)
                 await TradeOrderUsecase(symbol=settings.XAUUSD_SYMBOL).monitor_open_orders(session)
                 await TradeOrderUsecase(symbol=settings.XAUUSD_SYMBOL).monitor_pending_orders(session)
+                await TradeSignalUsecase().monitor_limit_entries(session)
+                await TradeSignalXauusdUsecase().monitor_limit_entries(session)
 
         # ── EURUSD M15 ──────────────────────────────────────────────────────
         m15_time = times.get("m15")

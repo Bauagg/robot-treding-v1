@@ -98,16 +98,23 @@ def fetch_all_symbols() -> dict[str, dict[str, pd.DataFrame]]:
 
 def _trend_label(df: pd.DataFrame) -> str:
     """
-    Hitung trend dari struktur candlestick (price action):
-    - Ambil 3 swing high dan 3 swing low terakhir
-    - UP    : HH (higher high) + HL (higher low)
-    - DOWN  : LH (lower high)  + LL (lower low)
-    - Selain itu: SIDEWAYS
+    Hitung trend dari struktur swing — tahan terhadap pullback normal.
+
+    Pakai 3 swing terakhir (bukan 2) supaya satu pullback tidak langsung
+    membalik label. Tren tetap UP selama mayoritas struktur masih HH+HL,
+    meski swing terakhir sedang koreksi.
+
+    UP   : minimal 2 dari 3 pasang swing masih HH+HL
+           AND harga saat ini belum break swing low ke-2 (masih pullback wajar)
+    DOWN : minimal 2 dari 3 pasang swing masih LH+LL
+           AND harga saat ini belum break swing high ke-2
+    Selain itu: SIDEWAYS
     """
     highs = df["high"].values
     lows  = df["low"].values
+    close = float(df["close"].iloc[-1])
     n     = len(df)
-    w     = 2   # window kiri & kanan untuk swing — lebih sensitif detect HH/HL
+    w     = 3   # window lebih lebar → swing lebih signifikan, tidak mudah goyah
 
     swing_highs = []
     swing_lows  = []
@@ -118,19 +125,27 @@ def _trend_label(df: pd.DataFrame) -> str:
         if lows[i] == min(lows[i - w: i + w + 1]):
             swing_lows.append(lows[i])
 
-    if len(swing_highs) < 2 or len(swing_lows) < 2:
+    if len(swing_highs) < 3 or len(swing_lows) < 3:
         return "SIDEWAYS"
 
-    # Ambil 3 swing terakhir untuk konfirmasi lebih solid
-    hh = swing_highs[-1] > swing_highs[-2]
-    hl = swing_lows[-1]  > swing_lows[-2]
-    lh = swing_highs[-1] < swing_highs[-2]
-    ll = swing_lows[-1]  < swing_lows[-2]
+    sh = swing_highs[-3:]   # 3 swing high terakhir
+    sl = swing_lows[-3:]    # 3 swing low terakhir
 
-    if hh and hl:
+    # Hitung berapa pasang yang HH/HL atau LH/LL
+    hh_count = sum(1 for i in range(1, len(sh)) if sh[i] > sh[i - 1])
+    hl_count = sum(1 for i in range(1, len(sl)) if sl[i] > sl[i - 1])
+    lh_count = sum(1 for i in range(1, len(sh)) if sh[i] < sh[i - 1])
+    ll_count = sum(1 for i in range(1, len(sl)) if sl[i] < sl[i - 1])
+
+    # Tren UP: mayoritas struktur masih naik + harga belum break swing low ke-2
+    # (break swing low ke-2 = reversal, bukan pullback biasa)
+    if hh_count >= 1 and hl_count >= 1 and close > sl[-2]:
         return "UP"
-    if lh and ll:
+
+    # Tren DOWN: mayoritas struktur masih turun + harga belum break swing high ke-2
+    if lh_count >= 1 and ll_count >= 1 and close < sh[-2]:
         return "DOWN"
+
     return "SIDEWAYS"
 
 
@@ -288,12 +303,106 @@ def _sr_zones(df: pd.DataFrame, close: float) -> dict:
         return {"sup_zones": [], "res_zones": [], "near_sup": [], "near_res": []}
 
 
+# ─── Deteksi fase: trending atau koreksi ─────────────────────────────────────
+
+def _detect_phase(df_h1: pd.DataFrame, df_m15: pd.DataFrame, trend: str, pip: float = 0.0001) -> dict:
+    """
+    Deteksi apakah harga sedang TRENDING (lanjut) atau RETRACING (koreksi).
+    Pakai MACD histogram H1 + M15 dan posisi harga vs swing low/high terdekat.
+
+    Return:
+      phase  : "TRENDING" | "RETRACING" | "UNCLEAR"
+      label  : emoji + teks untuk ditampilkan
+      note   : penjelasan singkat kenapa
+    """
+    if trend not in ("UP", "DOWN"):
+        return {"phase": "UNCLEAR", "label": "➡️ Sideways", "note": "Tidak ada tren jelas"}
+
+    try:
+        # ── MACD histogram H1 ──
+        _, _, hist_h1 = calculate_macd(df_h1)
+        h1_hist = float(hist_h1.iloc[-1])
+        h1_prev = float(hist_h1.iloc[-2])
+
+        # ── MACD histogram M15 ──
+        _, _, hist_m15 = calculate_macd(df_m15)
+        m15_hist = float(hist_m15.iloc[-1])
+        m15_prev = float(hist_m15.iloc[-2])
+
+        # ── Posisi harga vs swing low/high H1 ──
+        close    = float(df_m15["close"].iloc[-1])
+        res_raw, sup_raw = find_swing_levels(df_h1, lookback=min(200, len(df_h1) - 10), window=3)
+
+        # Swing support terdekat di bawah harga (untuk UP trend)
+        sup_below = sorted([z for z in sup_raw if z < close], reverse=True)
+        near_sup  = sup_below[0] if sup_below else None
+
+        # Swing resistance terdekat di atas harga (untuk DOWN trend)
+        res_above = sorted([z for z in res_raw if z > close])
+        near_res  = res_above[0] if res_above else None
+
+    except Exception:
+        return {"phase": "UNCLEAR", "label": "❓ Tidak bisa hitung", "note": ""}
+
+    if trend == "UP":
+        # MACD H1 masih positif dan naik = momentum lanjut
+        h1_bullish  = h1_hist > 0 and h1_hist >= h1_prev
+        # MACD M15 mulai naik = entry momentum muncul
+        m15_bullish = m15_hist > m15_prev
+        if h1_bullish and m15_bullish:
+            return {"phase": "TRENDING", "label": "🚀 Lanjut naik", "note": "MACD H1+M15 bullish, momentum kuat"}
+
+        # H1 masih positif tapi M15 mulai turun = koreksi M15 dalam tren H1
+        if h1_hist > 0 and m15_hist < m15_prev:
+            if near_sup:
+                dist_pip = round((close - near_sup) / pip, 0)
+                return {
+                    "phase": "RETRACING",
+                    "label": "🔄 Koreksi — tunggu support",
+                    "note":  f"M15 melemah, support H1 terdekat ~{dist_pip:.0f} pip di bawah",
+                }
+            return {"phase": "RETRACING", "label": "🔄 Koreksi", "note": "M15 melemah, MACD H1 masih positif"}
+
+        # H1 histogram mulai negatif = koreksi lebih dalam
+        if h1_hist < 0:
+            return {"phase": "RETRACING", "label": "⚠️ Koreksi dalam", "note": "MACD H1 negatif — tunggu reversal M15"}
+
+    else:  # DOWN
+        h1_bearish  = h1_hist < 0 and h1_hist <= h1_prev
+        m15_bearish = m15_hist < m15_prev
+
+        if h1_bearish and m15_bearish:
+            return {"phase": "TRENDING", "label": "🔻 Lanjut turun", "note": "MACD H1+M15 bearish, momentum kuat"}
+
+        if h1_hist < 0 and m15_hist > m15_prev:
+            if near_res:
+                dist_pip = round((near_res - close) / pip, 0)
+                return {
+                    "phase": "RETRACING",
+                    "label": "🔄 Koreksi — tunggu resistance",
+                    "note":  f"M15 menguat, resistance H1 terdekat ~{dist_pip:.0f} pip di atas",
+                }
+            return {"phase": "RETRACING", "label": "🔄 Koreksi", "note": "M15 menguat, MACD H1 masih negatif"}
+
+        if h1_hist > 0:
+            return {"phase": "RETRACING", "label": "⚠️ Koreksi dalam", "note": "MACD H1 positif — tunggu reversal M15"}
+
+    return {"phase": "UNCLEAR", "label": "❓ Tidak jelas", "note": "Momentum mixed"}
+
+
 # ─── Build pesan analisis ─────────────────────────────────────────────────────
 
 def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
     from datetime import datetime
     now = datetime.now().strftime("%d/%m %H:%M")
     L   = []
+
+    # ── Buang candle berjalan (belum close) dari semua TF ──
+    # Analisa harus pakai candle yang sudah selesai supaya tidak kedip-kedip.
+    frames = {
+        tf: (df.iloc[:-1] if df is not None and len(df) > 1 else df)
+        for tf, df in frames.items()
+    }
 
     # ── Header ──────────────────────────────
     L.append(f"<b>📊 {symbol} | {now}</b>")
@@ -353,17 +462,19 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
             continue
 
         labels = ["Terdekat", "Tengah", "Paling jauh"]
-        L.append(f"  <b>{tf}</b> — harga {close:.5f}")
+        pip    = _pip_size(symbol)
+        dec    = _price_decimals(symbol)
+        L.append(f"  <b>{tf}</b> — harga {close:.{dec}f}")
         for idx, (s, r) in enumerate(pairs):
-            rng   = round((r - s) / 0.0001, 1)
-            s_pip = round((close - s) / 0.0001, 1)
-            r_pip = round((r - close) / 0.0001, 1)
+            rng   = round((r - s) / pip, 1)
+            s_pip = round((close - s) / pip, 1)
+            r_pip = round((r - close) / pip, 1)
             s_tag = "⚠️" if s in sr["near_sup"] else ""
             r_tag = "⚠️" if r in sr["near_res"] else ""
             lbl   = labels[idx] if idx < len(labels) else ""
             L.append(
                 f"    [{lbl}] ↕{rng}p\n"
-                f"    🔴 {s:.5f}{s_tag} (-{s_pip}p)  →  🟢 {r:.5f}{r_tag} (+{r_pip}p)"
+                f"    🔴 {s:.{dec}f}{s_tag} (-{s_pip}p)  →  🟢 {r:.{dec}f}{r_tag} (+{r_pip}p)"
             )
 
     # ── Kesimpulan ──────────────────────────
@@ -384,6 +495,18 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
 
     L.append(f"<b>🎯 {bias}</b>  {up}↑ {down}↓ dari {n} TF")
     L.append(f"  {saran}")
+
+    # ── Fase pasar (koreksi atau lanjut) ────────
+    df_h1_phase  = frames.get("H1")
+    df_m15_phase = frames.get("M15")
+    trend_for_phase = "UP" if up >= down else "DOWN"
+    if df_h1_phase is not None and df_m15_phase is not None and len(df_h1_phase) >= 35 and len(df_m15_phase) >= 35:
+        phase = _detect_phase(df_h1_phase, df_m15_phase, trend_for_phase, pip=_pip_size(symbol))
+        L.append(f"\n<b>Fase</b>  {phase['label']}")
+        if phase["note"]:
+            L.append(f"  <i>{phase['note']}</i>")
+        if phase["phase"] == "RETRACING":
+            L.append("  ⏳ <b>Tunggu koreksi selesai sebelum entry</b>")
 
     # ── Kalkulasi Order ──────────────────────
     has_bias = bias not in ("⚪ Sideways",)

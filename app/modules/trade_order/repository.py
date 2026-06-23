@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select, func
@@ -80,15 +80,13 @@ class TradeOrderRepository:
         }
 
     async def get_pending_orders(self, symbol: str) -> list[TradeOrder]:
-        """Ambil pending order yang expire_at masih dalam 15 menit ke depan."""
-        now        = datetime.now().replace(microsecond=0)
-        window_end = now + timedelta(minutes=15)
+        """Ambil semua pending order aktif (status pending) untuk symbol ini.
+        Cek expire dilakukan di usecase agar order yang sudah lewat ditandai expired.
+        """
         result = await self.db.execute(
             select(TradeOrder).where(
-                TradeOrder.symbol    == symbol,
-                TradeOrder.status    == "pending",
-                TradeOrder.expire_at >  now,
-                TradeOrder.expire_at <= window_end,
+                TradeOrder.symbol == symbol,
+                TradeOrder.status == "pending",
             )
         )
         return result.scalars().all()
@@ -97,6 +95,23 @@ class TradeOrderRepository:
         order.status = "expired"
         await self.db.flush()
         return order
+
+    async def get_pending_limits(self, symbol: str) -> list[TradeOrder]:
+        """Pending LIMIT order robot yang belum keisi (signal/candle belum dibuat)."""
+        result = await self.db.execute(
+            select(TradeOrder).where(
+                TradeOrder.symbol     == symbol,
+                TradeOrder.status     == "pending",
+                TradeOrder.order_kind == "limit",
+            )
+        )
+        return result.scalars().all()
+
+    async def delete_order(self, order: TradeOrder) -> None:
+        """Hapus baris order (dipakai untuk pending LIMIT yang expire/cancel
+        supaya DB tetap bersih — tidak ada jejak order yang tidak pernah keisi)."""
+        await self.db.delete(order)
+        await self.db.flush()
 
     async def get_open_orders(self, symbol: str) -> list[TradeOrder]:
         result = await self.db.execute(

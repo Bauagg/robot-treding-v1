@@ -20,6 +20,7 @@ class TradeOrder(Base):
     tp:          Mapped[float | None] = mapped_column(Float, nullable=True)
     ticket:       Mapped[int | None]   = mapped_column(BigInteger, nullable=True)   # MT5 ticket
     status:       Mapped[str]          = mapped_column(String(20))   # pending / open / closed / failed / expired
+    order_kind:   Mapped[str]          = mapped_column(String(10), default="market")  # market / limit / stop
     entry_target: Mapped[float | None] = mapped_column(Float, nullable=True)    # harga target entry (pending order)
     expire_at:    Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # batas waktu pending order
     close_price: Mapped[float | None] = mapped_column(Float, nullable=True)

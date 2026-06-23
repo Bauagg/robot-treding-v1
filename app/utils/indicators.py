@@ -2,6 +2,48 @@ import pandas as pd
 import pandas_ta as ta
 
 
+# ─── Pip helpers (dipakai bersama oleh order & telegram) ──────────────────────
+
+def pip_size(symbol: str) -> float:
+    """
+    Ukuran 1 pip per symbol.
+    Forex 4/5-digit : 0.0001  (EURUSD, GBPUSD, dll)
+    JPY pairs       : 0.01
+    XAUUSD (Gold)   : 0.01
+    XAGUSD (Silver) : 0.001
+    Crypto BTC      : 1.0
+    Crypto ETH/XRP  : 0.1
+    """
+    s = (symbol or "").upper()
+    if "JPY" in s:
+        return 0.01
+    if "XAU" in s:
+        return 0.01
+    if "XAG" in s:
+        return 0.001
+    if "BTC" in s:
+        return 1.0
+    if any(x in s for x in ("ETH", "XRP", "LTC", "BNB")):
+        return 0.1
+    return 0.0001
+
+
+def pip_value_usd(symbol: str, lot: float) -> float:
+    """
+    Nilai USD per 1 pip untuk lot tertentu (akun quote USD).
+    Forex xxx/USD : ~$10 per 1.0 lot per pip (0.0001)
+    XAUUSD        : 1 lot = 100 oz, 1 pip (0.01) = $1.0 per lot
+    Fallback ke estimasi forex kalau tidak dikenali.
+    """
+    s = (symbol or "").upper()
+    if "XAU" in s:
+        return lot * 100 * pip_size(symbol)   # 100 oz/lot × pip
+    if "XAG" in s:
+        return lot * 5000 * pip_size(symbol)  # 5000 oz/lot × pip
+    # Forex standar: $10 per pip per 1.0 lot
+    return lot * 10
+
+
 # ─── EMA ────────────────────────────────────────────────────────────────────
 
 def calculate_ema(df: pd.DataFrame, period: int) -> pd.Series:
