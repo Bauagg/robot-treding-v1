@@ -211,7 +211,7 @@ class TradeOrderUsecase:
         """
         sym       = symbol or self.symbol
         repo      = TradeOrderRepository(db)
-        expire_at = datetime.now(timezone.utc) + timedelta(hours=expire_hours)
+        expire_at = (datetime.now(timezone.utc) + timedelta(hours=expire_hours)).replace(tzinfo=None)
 
         record = await repo.save({
             "signal_id":    0,
@@ -267,7 +267,7 @@ class TradeOrderUsecase:
             "sl":           sl,
             "tp":           tp,
             "entry_target": entry_target,
-            "expire_at":    expire_at,
+            "expire_at":    expire_at.replace(tzinfo=None) if expire_at else None,
             "status":       "pending",
             "order_kind":   "limit",       # trigger saat harga RETRACE ke target
             "created_by":   created_by,
