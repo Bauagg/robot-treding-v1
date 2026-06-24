@@ -346,7 +346,10 @@ class TradeOrderUsecase:
 
         for order in pending:
             # Cek expire
-            if order.expire_at and now >= order.expire_at:
+            expire_at = order.expire_at
+            if expire_at is not None and expire_at.tzinfo is None:
+                expire_at = expire_at.replace(tzinfo=timezone.utc)
+            if expire_at is not None and now >= expire_at:
                 await repo.expire_order(order)
                 logger.info(f"[{self.symbol}] Pending order #{order.id} EXPIRED | target={order.entry_target}")
                 continue
