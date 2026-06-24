@@ -64,11 +64,11 @@ def _fetch_df(symbol: str, tf_const, count: int) -> pd.DataFrame | None:
     return df
 
 
-def fetch_all_symbols() -> dict[str, dict[str, pd.DataFrame]]:
+def fetch_all_symbols() -> dict[str, dict]:
     """
-    Fetch D1/H4/H1/M15 untuk semua symbol di WATCH_SYMBOLS.
+    Fetch D1/H4/H1/M15 dan harga live (bid) untuk semua symbol di WATCH_SYMBOLS.
     Buka koneksi MT5 satu kali untuk semua symbol.
-    Return: { "ETHUSDm": {"D1": df, "H4": df, ...}, ... }
+    Return: { "XAUUSDm": {"D1": df, "H4": df, ..., "live_price": 2345.67}, ... }
     """
     symbols = [s.strip() for s in settings.WATCH_SYMBOLS.split(",") if s.strip()]
     ok = mt5.initialize(
@@ -82,11 +82,14 @@ def fetch_all_symbols() -> dict[str, dict[str, pd.DataFrame]]:
     try:
         result = {}
         for sym in symbols:
+            tick = mt5.symbol_info_tick(sym)
+            live_price = float(tick.bid) if tick else None
             result[sym] = {
-                "D1":  _fetch_df(sym, mt5.TIMEFRAME_D1,  365),   # 1 tahun — level mayor terbukti
-                "H4":  _fetch_df(sym, mt5.TIMEFRAME_H4,  720),   # ~4 bulan — zona aktif cukup dalam
-                "H1":  _fetch_df(sym, mt5.TIMEFRAME_H1,  720),   # ~1 bulan — struktur penuh
-                "M15": _fetch_df(sym, mt5.TIMEFRAME_M15, 500),   # ~5 hari — swing M15 valid untuk entry
+                "D1":  _fetch_df(sym, mt5.TIMEFRAME_D1,  365),
+                "H4":  _fetch_df(sym, mt5.TIMEFRAME_H4,  720),
+                "H1":  _fetch_df(sym, mt5.TIMEFRAME_H1,  720),
+                "M15": _fetch_df(sym, mt5.TIMEFRAME_M15, 500),
+                "live_price": live_price,
             }
         return result
     finally:
@@ -305,7 +308,7 @@ def _sr_zones(df: pd.DataFrame, close: float) -> dict:
 
 # ─── Deteksi fase: trending atau koreksi ─────────────────────────────────────
 
-def _detect_phase(df_h1: pd.DataFrame, df_m15: pd.DataFrame, trend: str, pip: float = 0.0001) -> dict:
+def _detect_phase(df_h1: pd.DataFrame, df_m15: pd.DataFrame, trend: str, pip: float = 0.0001, live_price: float | None = None) -> dict:
     """
     Deteksi apakah harga sedang TRENDING (lanjut) atau RETRACING (koreksi).
     Pakai MACD histogram H1 + M15 dan posisi harga vs swing low/high terdekat.
@@ -314,6 +317,7 @@ def _detect_phase(df_h1: pd.DataFrame, df_m15: pd.DataFrame, trend: str, pip: fl
       phase  : "TRENDING" | "RETRACING" | "UNCLEAR"
       label  : emoji + teks untuk ditampilkan
       note   : penjelasan singkat kenapa
+      entry  : (opsional) level harga untuk masuk saat koreksi selesai
     """
     if trend not in ("UP", "DOWN"):
         return {"phase": "UNCLEAR", "label": "➡️ Sideways", "note": "Tidak ada tren jelas"}
@@ -330,7 +334,8 @@ def _detect_phase(df_h1: pd.DataFrame, df_m15: pd.DataFrame, trend: str, pip: fl
         m15_prev = float(hist_m15.iloc[-2])
 
         # ── Posisi harga vs swing low/high H1 ──
-        close    = float(df_m15["close"].iloc[-1])
+        # Pakai harga live kalau ada supaya jarak ke swing akurat ke kondisi sekarang.
+        close    = live_price if live_price else float(df_m15["close"].iloc[-1])
         res_raw, sup_raw = find_swing_levels(df_h1, lookback=min(200, len(df_h1) - 10), window=3)
 
         # Swing support terdekat di bawah harga (untuk UP trend)
@@ -360,6 +365,7 @@ def _detect_phase(df_h1: pd.DataFrame, df_m15: pd.DataFrame, trend: str, pip: fl
                     "phase": "RETRACING",
                     "label": "🔄 Koreksi — tunggu support",
                     "note":  f"M15 melemah, support H1 terdekat ~{dist_pip:.0f} pip di bawah",
+                    "entry": near_sup,   # BUY saat harga retrace ke support ini
                 }
             return {"phase": "RETRACING", "label": "🔄 Koreksi", "note": "M15 melemah, MACD H1 masih positif"}
 
@@ -381,6 +387,7 @@ def _detect_phase(df_h1: pd.DataFrame, df_m15: pd.DataFrame, trend: str, pip: fl
                     "phase": "RETRACING",
                     "label": "🔄 Koreksi — tunggu resistance",
                     "note":  f"M15 menguat, resistance H1 terdekat ~{dist_pip:.0f} pip di atas",
+                    "entry": near_res,   # SELL saat harga retrace ke resistance ini
                 }
             return {"phase": "RETRACING", "label": "🔄 Koreksi", "note": "M15 menguat, MACD H1 masih negatif"}
 
@@ -392,10 +399,13 @@ def _detect_phase(df_h1: pd.DataFrame, df_m15: pd.DataFrame, trend: str, pip: fl
 
 # ─── Build pesan analisis ─────────────────────────────────────────────────────
 
-def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
+def build_market_analysis(symbol: str, frames: dict) -> str:
     from datetime import datetime
     now = datetime.now().strftime("%d/%m %H:%M")
     L   = []
+
+    # Ambil harga live sebelum frames di-strip
+    live_price: float | None = frames.pop("live_price", None)
 
     # ── Buang candle berjalan (belum close) dari semua TF ──
     # Analisa harus pakai candle yang sudah selesai supaya tidak kedip-kedip.
@@ -451,11 +461,15 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
         df = frames.get(tf)
         if df is None or len(df) < 20:
             continue
+        # M15 = posisi harga relatif ke harga live sekarang;
+        # TF besar pakai close candle masing-masing (tidak bergerak secepat M15).
+        # Zona S/R tetap dihitung dari struktur candle closed (analisa strategis).
         close = float(df["close"].iloc[-1])
-        sr    = _sr_zones(df, close)
+        ref   = live_price if (tf == "M15" and live_price) else close
+        sr    = _sr_zones(df, ref)
 
-        res_above = sorted([z for z in sr["res_zones"] if z > close])[:3]
-        sup_below = sorted([z for z in sr["sup_zones"] if z < close], reverse=True)[:3]
+        res_above = sorted([z for z in sr["res_zones"] if z > ref])[:3]
+        sup_below = sorted([z for z in sr["sup_zones"] if z < ref], reverse=True)[:3]
         pairs     = list(zip(sup_below, res_above))
 
         if not pairs:
@@ -464,11 +478,11 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
         labels = ["Terdekat", "Tengah", "Paling jauh"]
         pip    = _pip_size(symbol)
         dec    = _price_decimals(symbol)
-        L.append(f"  <b>{tf}</b> — harga {close:.{dec}f}")
+        L.append(f"  <b>{tf}</b> — harga {ref:.{dec}f}")
         for idx, (s, r) in enumerate(pairs):
             rng   = round((r - s) / pip, 1)
-            s_pip = round((close - s) / pip, 1)
-            r_pip = round((r - close) / pip, 1)
+            s_pip = round((ref - s) / pip, 1)
+            r_pip = round((r - ref) / pip, 1)
             s_tag = "⚠️" if s in sr["near_sup"] else ""
             r_tag = "⚠️" if r in sr["near_res"] else ""
             lbl   = labels[idx] if idx < len(labels) else ""
@@ -501,18 +515,34 @@ def build_market_analysis(symbol: str, frames: dict[str, pd.DataFrame]) -> str:
     df_m15_phase = frames.get("M15")
     trend_for_phase = "UP" if up >= down else "DOWN"
     if df_h1_phase is not None and df_m15_phase is not None and len(df_h1_phase) >= 35 and len(df_m15_phase) >= 35:
-        phase = _detect_phase(df_h1_phase, df_m15_phase, trend_for_phase, pip=_pip_size(symbol))
+        phase = _detect_phase(df_h1_phase, df_m15_phase, trend_for_phase, pip=_pip_size(symbol), live_price=live_price)
         L.append(f"\n<b>Fase</b>  {phase['label']}")
         if phase["note"]:
             L.append(f"  <i>{phase['note']}</i>")
         if phase["phase"] == "RETRACING":
             L.append("  ⏳ <b>Tunggu koreksi selesai sebelum entry</b>")
 
+            # Kalau ada level retrace yang jelas, kasih angka entry/SL/TP-nya
+            # supaya user tahu harus pasang pending di harga berapa.
+            entry_lvl = phase.get("entry")
+            df_m15_e  = frames.get("M15")
+            if entry_lvl and df_m15_e is not None and len(df_m15_e) >= 15:
+                atr_e  = float(calculate_atr(df_m15_e, 14).iloc[-1])
+                side_e = "BUY" if trend_for_phase == "UP" else "SELL"
+                # SL/TP dari level entry retrace, multiplier setup bagus (1.2 / 2.0)
+                oe  = _order_calc(entry_lvl, side_e, atr_e, 1.2, 2.0, symbol)
+                dec = oe["dec"]
+                L.append(f"\n  <b>📌 Rencana {side_e} (pending di koreksi)</b>")
+                L.append(f"    Entry : {entry_lvl:.{dec}f}")
+                L.append(f"    SL    : {oe['sl']:.{dec}f}  (-{oe['sl_pip']:.0f} pip)")
+                L.append(f"    TP    : {oe['tp']:.{dec}f}  (+{oe['tp_pip']:.0f} pip)")
+                L.append(f"    R:R   : 1 : {oe['rr']}")
+
     # ── Kalkulasi Order ──────────────────────
     has_bias = bias not in ("⚪ Sideways",)
     if df_m15 is not None and len(df_m15) >= 15 and has_bias:
         atr   = float(calculate_atr(df_m15, 14).iloc[-1])
-        close = float(df_m15["close"].iloc[-1])
+        close = live_price if live_price else float(df_m15["close"].iloc[-1])
         side  = "BUY" if up >= down else "SELL"
 
         # Kumpulkan MACD detail semua TF untuk quality check
